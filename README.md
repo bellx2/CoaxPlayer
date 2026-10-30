@@ -19,8 +19,9 @@ swift build                                      # 開発用（.deps のライ�
 COAX_DIR=../coax ./scripts/bundle.sh             # dist/CoaxPlayer.app を作る
 ```
 
-`build-deps.sh` は coax-gpui と同じもので、FFmpeg 9.0.2（MPEG-TS、H.264、MPEG-2 映像、AAC と VideoToolbox のみ）、libplacebo、libass ほか、mpv 0.41.0（libmpv のみ、`-Dgpl=false`）をビルドする。
+`build-deps.sh` は coax-gpui のものを元にしていて、FFmpeg 9.0.2（MPEG-TS、H.264、MPEG-2 映像、AAC と VideoToolbox のみ）、libplacebo、libass ほか、mpv 0.41.0（libmpv のみ、`-Dgpl=false`）をビルドする。
 ソースは公式の配布元から取得して SHA-256 を照合する。
+mpv は Cocoa を外すと、音声出力が使う `osdep/utils-mac.c` がコンパイルされず、Foundation もリンクされない（リンクは通るが、その関数を呼んだ時点で落ちる）。そのため `meson.build` を書き換えて足し、最後に未解決の参照（`nm -m` の `dynamically looked up`）が残っていないことを確かめる。
 GPL の部品を含めないので、同梱するライブラリは LGPL などの条件で配布できる（`coaxd` は GPL-2.0-only なので、同梱するときはその条件に従う）。
 最低対応 OS は `MACOSX_DEPLOYMENT_TARGET`（既定 13.0）で変えられる。
 
@@ -88,6 +89,10 @@ FAKE_TS=/path/to/file.ts swift run CoaxPlayer --coax "$PWD/scripts/fake-coax.sh"
 - OpenGL は macOS で非推奨で、NSOpenGLView/CGL のコンテキスト管理とスレッドの扱いが増える。SW なら描画キュー 1 本と CALayer だけで済む
 - 拡大はレイヤの補間に任せるので、ウィンドウサイズを変えても再描画は要らない
 - 描く先を IOSurface にしてコピーをなくし、CPU での拡大（フルセグの 1440→1920）は `sws-scaler=bilinear` にした。フルセグ相当（MPEG-2 1440x1080i、15Mbps）で M4 Pro の 1 コアの約 26%（デコード自体は約 2%）
+
+## 音声
+
+二か国語や解説の番組（デュアルモノ。左に主音声、右に副音声）は、そのままだと両方が同時に鳴る。mpv に `ad-lavc-o=dual_mono_mode=main` を指定し、主音声だけを両方のスピーカーから鳴らす。普通のステレオの番組には効かない。
 
 ## 高精細化（macOS 26 以降）
 

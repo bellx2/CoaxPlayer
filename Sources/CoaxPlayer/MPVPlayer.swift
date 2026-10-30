@@ -47,6 +47,9 @@ final class MPVPlayer {
             ("hwdec", "no"),
             // CPU での拡大（フルセグの 1440→1920）は既定の lanczos だと重い。表示時に GPU でも拡大するので軽い方式で足りる
             ("sws-scaler", "bilinear"),
+            // 二か国語や解説の番組（デュアルモノ）は左に主音声、右に副音声が入っていて、そのままだと両方鳴る。
+            // 主音声だけにする。普通のステレオには効かない
+            ("ad-lavc-o", "dual_mono_mode=main"),
             ("profile", "low-latency"),
             ("cache", "no"),
             ("demuxer-lavf-probesize", "200000"),

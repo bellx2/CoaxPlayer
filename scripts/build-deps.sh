@@ -104,6 +104,12 @@ meson_install libplacebo -Dvulkan=disabled -Dopengl=disabled -Dd3d11=disabled -D
 # libmpv だけを作る。描画はソフトウェア描画を使うので、GL と Cocoa は要らない
 fetch mpv https://github.com/mpv-player/mpv/archive/refs/tags/v0.41.0.tar.gz \
   ee21092a5ee427353392360929dc64645c54479aefdb5babc5cfbb5fad626209
+# Cocoa を外すと、音声出力が使う utils-mac.c（cfstr_from_cstr など）がコンパイルされず、
+# AVFoundation の出力が使う Foundation もリンクされない。リンクは通るが、呼んだ時点で落ちるので足す
+(cd "$SRC/mpv" &&
+  sed -i '' "s|'audio/out/ao_coreaudio_utils.c')|'audio/out/ao_coreaudio_utils.c', 'osdep/utils-mac.c')|" meson.build &&
+  sed -i '' "s|modules: \['CoreMedia', 'AVFoundation'\]|modules: ['CoreMedia', 'AVFoundation', 'Foundation']|" meson.build &&
+  grep -q "'osdep/utils-mac.c')" meson.build && grep -q "'AVFoundation', 'Foundation'" meson.build)
 meson_install mpv -Dlibmpv=true -Dcplayer=false -Dgpl=false -Dlibavdevice=disabled \
   -Dlua=disabled -Djavascript=disabled -Dlibarchive=disabled -Dlibbluray=disabled \
   -Ddvdnav=disabled -Dcdda=disabled -Duchardet=disabled -Drubberband=disabled -Dzimg=disabled \
@@ -112,5 +118,11 @@ meson_install mpv -Dlibmpv=true -Dcplayer=false -Dgpl=false -Dlibavdevice=disabl
   -Dmacos-touchbar=disabled -Dgl=disabled -Dvulkan=disabled -Dplain-gl=disabled \
   -Dvideotoolbox-gl=disabled -Dvideotoolbox-pl=disabled \
   -Dmanpage-build=disabled -Dhtml-build=disabled -Dpdf-build=disabled
+
+# どこにも定義の無い関数やクラスが残っていないことを確かめる（-undefined dynamic_lookup で見逃される）
+if nm -m "$PREFIX/lib/libmpv.dylib" | grep "dynamically looked up"; then
+  echo "libmpv に未解決の参照が残っています" >&2
+  exit 1
+fi
 
 echo "done: $PREFIX/lib"
