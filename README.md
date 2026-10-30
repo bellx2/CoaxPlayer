@@ -58,7 +58,7 @@ FAKE_TS=/path/to/file.ts swift run CoaxPlayer --coax "$PWD/scripts/fake-coax.sh"
 - `Sources/CoaxPlayer/MPVPlayer.swift` — libmpv の初期化、ソフトウェアレンダラでの描画、イベント処理
 - `Sources/CoaxPlayer/Enhancer.swift` — 高精細化（ノイズ除去と超解像、macOS 26 以降）
 - `Sources/CoaxPlayer/CoaxProcess.swift` — `coax tune` と `coax scan` の子プロセス。stdout を fd で返し（tune は mpv へ）、stderr を 1 行ずつ通知
-- `Sources/CoaxPlayer/Channels.swift` — `scan.json` から受信できたチャンネルを読む。スキャンで選べる範囲
+- `Sources/CoaxPlayer/Channels.swift` — `scan.json` から受信できたチャンネルを読む（リモコンの番号、簡易ロゴも）。スキャンで選べる範囲
 - `Sources/CoaxPlayer/PlayerModel.swift` — 起動引数、再生・停止、受信状態の保持
 - `Sources/CoaxPlayer/App.swift` — SwiftUI の画面と AppDelegate（終了時の後始末）。画面は coax-gpui と同じ配置と配色（左にチャンネル一覧と停止、右に映像、下に再生中のものと受信状態）
 - `scripts/fake-coax.sh` — 動作確認用の coax の代わり（stats と番組の行も出す）
@@ -68,6 +68,8 @@ FAKE_TS=/path/to/file.ts swift run CoaxPlayer --coax "$PWD/scripts/fake-coax.sh"
 `scan.json` が無いとき（または受信できたチャンネルが1つも無いとき）は、左にスキャンする範囲（地上 UHF 13〜62、地上 VHF 1〜12、ケーブル C13〜C63）が並ぶ。
 範囲を選んで「スキャン開始」を押すと `coax scan --discover=ISDBT --include '^(選んだ範囲)$' --output <--scan のパス>` を実行し、終わると一覧を読み込む。
 実行中は画面下に進捗の行を出し、「スキャン中止」で止められる（coax は進捗を残すので、次は続きから）。
+
+チャンネル一覧は、リモコンの番号（NIT の TS 情報記述子の `remote_control_key_id`）の順に、番号・簡易ロゴ・サービス名を並べる。番号が無い古い `scan.json` では物理チャンネル（`27ch` など）を出す。
 
 処理の流れ:
 

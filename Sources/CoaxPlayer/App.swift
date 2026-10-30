@@ -85,8 +85,9 @@ struct ContentView: View {
                     } else {
                         ForEach(model.channels) { channel in
                             ListButton(
-                                label: "\(String(repeating: " ", count: max(0, 3 - channel.channel.count)))\(channel.channel)  \(channel.name)",
+                                label: channel.name,
                                 active: model.playingChannel == channel.channel,
+                                number: channel.number,
                                 badge: channel.logo
                             ) { model.play(channel) }
                         }
@@ -144,6 +145,8 @@ struct ContentView: View {
 struct ListButton: View {
     let label: String
     let active: Bool
+    /// 先頭に出す番号（リモコンの番号）
+    var number: String? = nil
     /// 名前の前に枠付きで出す短い文字（簡易ロゴ）
     var badge: String? = nil
     let action: () -> Void
@@ -151,6 +154,10 @@ struct ListButton: View {
 
     var body: some View {
         HStack(spacing: 6) {
+            if let number {
+                Text(number).monospacedDigit()
+                    .frame(minWidth: 18, alignment: .trailing)
+            }
             if let badge {
                 Text(badge)
                     .font(.system(size: 10, weight: .semibold))

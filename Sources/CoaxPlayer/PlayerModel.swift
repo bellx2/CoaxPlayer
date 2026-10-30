@@ -30,7 +30,7 @@ struct Config {
 @MainActor
 final class PlayerModel: ObservableObject {
     @Published private(set) var channels: [Channel] = []
-    /// 再生中のチャンネル（"27 ＮＨＫ総合１・東京"）かファイル名
+    /// 再生中のチャンネル（"1 ＮＨＫ総合１・東京"）かファイル名
     @Published private(set) var playing: String?
     /// 再生中のチャンネル名。一覧で強調する
     @Published private(set) var playingChannel: String?
@@ -118,7 +118,7 @@ final class PlayerModel: ObservableObject {
         do {
             let fd = try t.start()
             tuner = t
-            playing = "\(channel.channel) \(channel.name)"
+            playing = "\(channel.number) \(channel.name)"
             playingChannel = channel.channel
             status = "選局中..."
             // fdclose:// は mpv が読み終えたら fd を閉じる

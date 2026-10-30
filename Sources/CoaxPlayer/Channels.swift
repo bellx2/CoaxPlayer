@@ -7,6 +7,11 @@ struct Channel: Identifiable {
     let name: String
     /// 簡易ロゴ（ワンセグ向けに、ロゴ画像の代わりに送られる局名の短い文字）。古い scan.json には無い
     let logo: String?
+    /// リモコンの番号（NIT の TS 情報記述子）。視聴者が普段使う番号はこちら
+    let remoteKey: Int?
+
+    /// 画面に出す番号。リモコンの番号が無ければ物理チャンネル
+    var number: String { remoteKey.map(String.init) ?? "\(channel)ch" }
 
     var id: String { channel }
 }
@@ -38,7 +43,7 @@ enum ScanFile {
         else {
             throw CocoaError(.fileReadCorruptFile, userInfo: [NSLocalizedDescriptionKey: "results がありません"])
         }
-        return results.compactMap { result in
+        let channels: [Channel] = results.compactMap { result in
             guard result["status"] as? String == "found",
                   let channel = result["channel"] as? String
             else { return nil }
@@ -49,7 +54,18 @@ enum ScanFile {
             let logo = services?.lazy
                 .compactMap { ($0["logo"] as? [String: Any])?["logo_char"] as? String }
                 .first { !$0.isEmpty }
-            return Channel(channel: channel, name: name, logo: logo)
+            // 自分の TS の記述にあるリモコンの番号
+            let tsid = transport?["transport_stream_id"] as? Int
+            let networks = transport?["networks"] as? [[String: Any]] ?? []
+            let remoteKey = networks
+                .filter { $0["actual"] as? Bool == true }
+                .flatMap { $0["transports"] as? [[String: Any]] ?? [] }
+                .first { $0["transport_stream_id"] as? Int == tsid }?["remote_control_key_id"] as? Int
+            return Channel(channel: channel, name: name, logo: logo, remoteKey: remoteKey)
         }
+        // リモコンの番号の順に並べる。番号の無いものは、スキャンした順のまま後ろへ
+        return channels.enumerated().sorted {
+            ($0.element.remoteKey ?? Int.max, $0.offset) < ($1.element.remoteKey ?? Int.max, $1.offset)
+        }.map(\.element)
     }
 }
