@@ -1,11 +1,13 @@
 import AppKit
 
 /// 起動引数。
-///   CoaxPlayer [--coax <path>] [--scan <path>] [--ch <n>] [--debug] [<ts file>]
+///   CoaxPlayer [--coax <path>] [--scan <path>] [--ch <n> [--record]] [--debug] [<ts file>]
 struct Config {
     var coaxPath: String?
     var scanPath = ScanFile.defaultPath
     var channel: String?
+    /// --ch で選局したものを、そのまま録画する
+    var record = false
     var file: String?
     var debug = false
 
@@ -17,6 +19,7 @@ struct Config {
             case "--coax": c.coaxPath = it.next()
             case "--scan": c.scanPath = it.next() ?? c.scanPath
             case "--ch": c.channel = it.next()
+            case "--record": c.record = true
             case "--debug": c.debug = true
             default:
                 // AppKit が付ける -NSxxx などは無視する
@@ -39,6 +42,10 @@ final class PlayerModel: ObservableObject {
     /// 今の番組と次の番組（`--program` の行の「開始-終了 番組名」）
     @Published private(set) var nowProgram: String?
     @Published private(set) var nextProgram: String?
+    /// 録画中のファイル
+    @Published private(set) var recording: URL?
+    /// 録画を終えたあとの MP4 への変換の状況。画面下に出す
+    @Published private(set) var recordingNote: String?
     /// スキャンする範囲。ScanRange.all と同じ並び
     @Published var ranges = [true, false, false]
     @Published private(set) var scanning = false
@@ -46,6 +53,10 @@ final class PlayerModel: ObservableObject {
     let config: Config
     let player: MPVPlayer
     private var tuner: CoaxProcess?
+    /// coax の出力を mpv へ中継し、録画中はファイルにも書く
+    private var tee: StreamTee?
+    /// 再生中のチャンネル。録画のファイル名に使う
+    private var current: Channel?
     private var scanner: CoaxProcess?
     private var debugTimer: Timer?
 
@@ -66,6 +77,7 @@ final class PlayerModel: ObservableObject {
         } else if let ch = config.channel {
             if let channel = channels.first(where: { $0.channel == ch }) {
                 play(channel)
+                if config.record { toggleRecording() }
             } else {
                 status = "\(ch) は scan.json にありません"
             }
@@ -106,12 +118,27 @@ final class PlayerModel: ObservableObject {
         }
         do {
             let fd = try t.start()
+            guard let tee = StreamTee(source: fd) else {
+                close(fd)
+                t.stop()
+                status = "パイプを作れません"
+                return
+            }
+            // coax が終わったら録画も終わる
+            tee.onEnd = { [weak self, weak tee] in
+                guard let self, let tee, self.tee === tee else { return }
+                self.finishRecording()
+                self.tee = nil
+            }
             tuner = t
+            self.tee = tee
+            current = channel
             playing = "\(channel.number) \(channel.name)"
             playingChannel = channel.channel
             status = "選局中..."
             // fdclose:// は mpv が読み終えたら fd を閉じる
-            player.load("fdclose://\(fd)")
+            player.load("fdclose://\(tee.mpvFD)")
+            tee.start()
         } catch {
             status = "coax: \(error.localizedDescription)"
         }
@@ -125,15 +152,99 @@ final class PlayerModel: ObservableObject {
     }
 
     func stop() {
-        // 先に子プロセスを止めてチューナーを解放する
+        finishRecording()
+        // 先に子プロセスを止めてチューナーを解放する。中継は coax が終わると自分で閉じる
         tuner?.stop()
         tuner = nil
+        tee = nil
+        current = nil
         player.stop()
         playing = nil
         playingChannel = nil
         nowProgram = nil
         nextProgram = nil
         status = "停止中"
+    }
+
+    func toggleRecording() {
+        if recording != nil {
+            finishRecording()
+            return
+        }
+        guard let tee, let current else { return }
+        let url = recordingURL(current)
+        do {
+            try tee.startRecording(to: url)
+            recording = url
+        } catch {
+            status = "録画を始められません: \(error.localizedDescription)"
+        }
+    }
+
+    private func finishRecording() {
+        guard let url = recording else { return }
+        tee?.stopRecording()
+        recording = nil
+        // 再生中の映像と音声を MP4 に入れる。フルセグも届いているときに、スクランブルのかかった方を選ばないため
+        let video = player.int64Property("current-tracks/video/src-id")
+        let audio = player.int64Property("current-tracks/audio/src-id")
+        convertToMP4(url, video: video, audio: audio)
+    }
+
+    /// 録画の TS から、主音声だけの MP4 を作る。TS は残す。映像はそのまま、音声は主音声だけにして AAC にし直す
+    private func convertToMP4(_ ts: URL, video: Int64?, audio: Int64?) {
+        let mp4 = ts.deletingPathExtension().appendingPathExtension("mp4")
+        var arguments = ["-hide_banner", "-loglevel", "error", "-y", "-dual_mono_mode", "main", "-i", ts.path]
+        if let video, let audio {
+            arguments += ["-map", "0:i:\(video)", "-map", "0:i:\(audio)"]
+        }
+        arguments += ["-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", mp4.path]
+
+        // .app では同梱した ffmpeg、無ければ PATH 上のもの
+        let process = Process()
+        let bundled = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("ffmpeg")
+        if let bundled, FileManager.default.isExecutableFile(atPath: bundled.path) {
+            process.executableURL = bundled
+            process.arguments = arguments
+        } else {
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = ["ffmpeg"] + arguments
+        }
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        process.terminationHandler = { [weak self] finished in
+            let ok = finished.terminationStatus == 0
+            DispatchQueue.main.async {
+                self?.recordingNote = ok
+                    ? "保存しました　\(mp4.path)（TS も残しています）"
+                    : "MP4 にできませんでした（TS は保存済み）　\(ts.path)"
+            }
+        }
+        do {
+            try process.run()
+            recordingNote = "MP4 に変換中　\(mp4.lastPathComponent)"
+        } catch {
+            recordingNote = "MP4 にできませんでした（TS は保存済み）　\(ts.path)"
+        }
+    }
+
+    /// ~/Movies/coax/日時_リモコンの番号_局名_番組名.ts
+    private func recordingURL(_ channel: Channel) -> URL {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd_HHmm"
+        var parts = [formatter.string(from: Date()), channel.number, channel.name]
+        // 今の番組は「開始-終了 番組名」なので、番組名だけを使う
+        if let title = nowProgram?.split(separator: " ", maxSplits: 1).last.map(String.init) {
+            parts.append(String(title.prefix(40)))
+        }
+        // パスに使えない文字は全角にする
+        let name = parts.joined(separator: "_")
+            .replacingOccurrences(of: "/", with: "／")
+            .replacingOccurrences(of: ":", with: "：")
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Movies/coax")
+            .appendingPathComponent(name + ".ts")
     }
 
     /// 選んだ範囲を `coax scan` で調べ、結果を scan.json に書いて一覧を読み直す
@@ -199,6 +310,7 @@ final class PlayerModel: ObservableObject {
     /// アプリ終了時の後始末
     func shutdown() {
         debugTimer?.invalidate()
+        finishRecording()
         tuner?.stop()
         tuner = nil
         scanner?.stop()
@@ -215,7 +327,7 @@ final class PlayerModel: ObservableObject {
                 let pos = p.doubleProperty("time-pos").map { String(format: "%.2f", $0) } ?? "-"
                 let fps = p.doubleProperty("estimated-vf-fps").map { String(format: "%.2f", $0) } ?? "-"
                 let w = p.int64Property("dwidth") ?? 0, h = p.int64Property("dheight") ?? 0
-                let line = "debug: time-pos=\(pos) estimated-vf-fps=\(fps) size=\(w)x\(h) rendered=\(p.renderedFrames) enhanced=\(p.enhancedFrames) luma=\(p.lastLuma) layer=\(Int(p.layer.bounds.width))x\(Int(p.layer.bounds.height)) contents=\(p.layer.contents != nil) gravity=\(p.layer.contentsGravity.rawValue) windows=\(NSApp.windows.filter(\.isVisible).count) tuner-pid=\(self.tuner?.pid ?? 0) now=\(self.nowProgram ?? "-") next=\(self.nextProgram ?? "-")\n"
+                let line = "debug: time-pos=\(pos) estimated-vf-fps=\(fps) size=\(w)x\(h) rendered=\(p.renderedFrames) enhanced=\(p.enhancedFrames) luma=\(p.lastLuma) layer=\(Int(p.layer.bounds.width))x\(Int(p.layer.bounds.height)) contents=\(p.layer.contents != nil) gravity=\(p.layer.contentsGravity.rawValue) windows=\(NSApp.windows.filter(\.isVisible).count) tuner-pid=\(self.tuner?.pid ?? 0) recording=\(self.recording?.lastPathComponent ?? "-") now=\(self.nowProgram ?? "-") next=\(self.nextProgram ?? "-")\n"
                 FileHandle.standardError.write(Data(line.utf8))
             }
         }

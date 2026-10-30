@@ -15,6 +15,8 @@ swift build -c release --product "$NAME"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks"
 cp ".build/release/$NAME" "$APP/Contents/MacOS/$NAME"
+# 録画の TS から MP4 を作るのに使う
+cp "$ROOT/.deps/prefix/bin/ffmpeg" "$APP/Contents/MacOS/ffmpeg"
 
 if [ -n "${COAX_DIR:-}" ]; then
   # coax は同じ場所にある coaxd を起動する
@@ -38,7 +40,7 @@ cat > "$APP/Contents/Info.plist" <<EOF
 EOF
 
 # 参照をたどって、.deps のライブラリを全部 Frameworks に集める
-queue=("$APP/Contents/MacOS/$NAME")
+queue=("$APP/Contents/MacOS/$NAME" "$APP/Contents/MacOS/ffmpeg")
 while [ ${#queue[@]} -gt 0 ]; do
   file=${queue[0]}
   queue=("${queue[@]:1}")
@@ -62,6 +64,8 @@ done
 
 # 開発用の .deps への rpath は配布物に要らない
 install_name_tool -delete_rpath "$LIB" "$APP/Contents/MacOS/$NAME" 2>/dev/null || true
+install_name_tool -delete_rpath "$LIB" "$APP/Contents/MacOS/ffmpeg" 2>/dev/null || true
+install_name_tool -add_rpath @executable_path/../Frameworks "$APP/Contents/MacOS/ffmpeg"
 for lib in "$APP"/Contents/Frameworks/*.dylib; do
   install_name_tool -add_rpath @loader_path "$lib" 2>/dev/null || true
 done
@@ -74,7 +78,7 @@ done
 codesign --force --sign "${SIGN_IDENTITY:--}" "$APP"
 
 # 外部への参照が残っていないことを確かめる（ファイル名の行は除く）
-if otool -L "$APP"/Contents/MacOS/$NAME "$APP"/Contents/Frameworks/*.dylib | grep -v ":$" | grep -E "/opt/homebrew|/usr/local|$ROOT"; then
+if otool -L "$APP"/Contents/MacOS/$NAME "$APP"/Contents/MacOS/ffmpeg "$APP"/Contents/Frameworks/*.dylib | grep -v ":$" | grep -E "/opt/homebrew|/usr/local|$ROOT"; then
   echo "外部のライブラリへの参照が残っています" >&2
   exit 1
 fi

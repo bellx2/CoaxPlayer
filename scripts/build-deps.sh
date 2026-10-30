@@ -67,12 +67,15 @@ fetch libass https://github.com/libass/libass/releases/download/0.17.5/libass-0.
 meson_install libass -Dfontconfig=disabled -Dcoretext=enabled -Dlibunibreak=disabled -Dtest=disabled
 
 # 放送の TS に要るものだけ：MPEG-TS、H.264、MPEG-2 映像、AAC。デコードは VideoToolbox も使う。
-# h264・aac・mpegvideo のデマルチプレクサーは、PMT より先に届いたストリームの中身を判別するのに要る
+# h264・aac・mpegvideo のデマルチプレクサーは、PMT より先に届いたストリームの中身を判別するのに要る。
+# 録画の TS から MP4 を作るため、ffmpeg コマンド、MP4 の書き出し、AAC のエンコーダーも入れる
 fetch ffmpeg https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz \
   8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e
 (cd "$SRC/ffmpeg" &&
   ./configure --prefix="$PREFIX" --install-name-dir='@rpath' \
-    --enable-shared --disable-static --disable-programs --disable-doc \
+    --enable-shared --disable-static --disable-ffprobe --disable-ffplay --disable-doc \
+    `# ffmpeg コマンドにライブラリの場所を入れ、.app で bundle.sh が付け替えられる余白も取る` \
+    --extra-ldflags="-Wl,-rpath,$PREFIX/lib -Wl,-headerpad_max_install_names" \
     --disable-autodetect --disable-network --disable-everything --disable-avdevice \
     --enable-videotoolbox --enable-audiotoolbox \
     --enable-demuxer=mpegts,h264,aac,mpegvideo \
@@ -80,6 +83,7 @@ fetch ffmpeg https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz \
     --enable-decoder=h264,mpeg2video,aac,aac_latm \
     --enable-hwaccel=h264_videotoolbox,mpeg2_videotoolbox \
     --enable-protocol=file,pipe \
+    --enable-muxer=mp4 --enable-encoder=aac --enable-bsf=aac_adtstoasc \
     --enable-filter=aformat,aresample,anull,format,null,scale,bwdif,yadif >/dev/null &&
   make -j"$JOBS" >/dev/null && make install >/dev/null)
 echo "built ffmpeg"

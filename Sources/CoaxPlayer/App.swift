@@ -57,6 +57,7 @@ private extension Color {
     static let buttonActive = Color(hex: 0x2f5f9f)
     static let text = Color(hex: 0xe0e0e0)
     static let placeholder = Color(hex: 0x808080)
+    static let recording = Color(hex: 0xb03030)
 }
 
 /// 左にチャンネル一覧と停止、右に映像、その下に再生中のものと受信状態。coax-gpui と同じ配置
@@ -93,6 +94,12 @@ struct ContentView: View {
                         }
                         Spacer().frame(height: 8)
                         ListButton(label: "停止", active: false) { model.stop() }
+                        if model.playingChannel != nil {
+                            ListButton(label: model.recording == nil ? "録画" : "録画停止",
+                                       active: model.recording != nil, activeColor: .recording) {
+                                model.toggleRecording()
+                            }
+                        }
                     }
                 }
                 .padding(8)
@@ -120,6 +127,13 @@ struct ContentView: View {
                         Text("次　\(next)").lineLimit(1).truncationMode(.tail)
                             .foregroundStyle(Color.placeholder)
                     }
+                    if let recording = model.recording {
+                        Text("録画中　\(recording.lastPathComponent)").lineLimit(1).truncationMode(.middle)
+                            .foregroundStyle(Color.recording)
+                    } else if let note = model.recordingNote {
+                        Text(note).lineLimit(1).truncationMode(.middle)
+                            .foregroundStyle(Color.placeholder)
+                    }
                     Text(model.status)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -141,6 +155,8 @@ struct ContentView: View {
 struct ListButton: View {
     let label: String
     let active: Bool
+    /// active のときの背景色
+    var activeColor: Color = .buttonActive
     /// 先頭に出す番号（リモコンの番号）
     var number: String? = nil
     /// 名前の前に枠付きで出す短い文字（簡易ロゴ）
@@ -166,7 +182,7 @@ struct ListButton: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(hovering ? Color.buttonHover : active ? Color.buttonActive : Color.button)
+            .background(hovering ? Color.buttonHover : active ? activeColor : Color.button)
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .contentShape(Rectangle())
             .onHover { hovering = $0 }

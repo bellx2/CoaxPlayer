@@ -19,7 +19,7 @@ swift build                                      # 開発用（.deps のライ�
 COAX_DIR=../coax ./scripts/bundle.sh             # dist/CoaxPlayer.app を作る
 ```
 
-`build-deps.sh` は coax-gpui のものを元にしていて、FFmpeg 9.0.2（MPEG-TS、H.264、MPEG-2 映像、AAC と VideoToolbox のみ）、libplacebo、libass ほか、mpv 0.41.0（libmpv のみ、`-Dgpl=false`）をビルドする。
+`build-deps.sh` は coax-gpui のものを元にしていて、FFmpeg 9.0.2（MPEG-TS、H.264、MPEG-2 映像、AAC と VideoToolbox のみ。録画の MP4 化のために ffmpeg コマンド、MP4 の書き出し、AAC のエンコーダーも）、libplacebo、libass ほか、mpv 0.41.0（libmpv のみ、`-Dgpl=false`）をビルドする。
 ソースは公式の配布元から取得して SHA-256 を照合する。
 mpv は Cocoa を外すと、音声出力が使う `osdep/utils-mac.c` がコンパイルされず、Foundation もリンクされない（リンクは通るが、その関数を呼んだ時点で落ちる）。そのため `meson.build` を書き換えて足し、最後に未解決の参照（`nm -m` の `dynamically looked up`）が残っていないことを確かめる。
 GPL の部品を含めないので、同梱するライブラリは LGPL などの条件で配布できる（`coaxd` は GPL-2.0-only なので、同梱するときはその条件に従う）。
@@ -50,6 +50,7 @@ FAKE_TS=/path/to/file.ts swift run CoaxPlayer --coax "$PWD/scripts/fake-coax.sh"
 | `--coax <path>` | 起動する coax のパス。省略時は実行ファイルと同じ場所の `coax`、無ければ PATH 上の `coax` |
 | `--scan <path>` | チャンネル一覧にする `coax scan` の結果。無ければここに作る。省略時は `~/Library/Application Support/coax-player/scan.json`（coax-gpui と共通） |
 | `--ch <n>` | 起動直後にこのチャンネルを再生する（`scan.json` にあるもの） |
+| `--record` | `--ch` で選局したものを、そのまま録画する |
 | `--debug` | mpv のログと、1 秒ごとの状態（time-pos、描画フレーム数、平均輝度など）を stderr に出す |
 | `<file>` | ファイルを再生する（`--ch` が無いとき） |
 
@@ -62,6 +63,7 @@ FAKE_TS=/path/to/file.ts swift run CoaxPlayer --coax "$PWD/scripts/fake-coax.sh"
 - `Sources/CoaxPlayer/Channels.swift` — `scan.json` から受信できたチャンネルを読む（リモコンの番号、簡易ロゴも）。スキャンで選べる範囲
 - `Sources/CoaxPlayer/PlayerModel.swift` — 起動引数、再生・停止、受信状態の保持
 - `Sources/CoaxPlayer/App.swift` — SwiftUI の画面と AppDelegate（終了時の後始末）。画面は coax-gpui と同じ配置と配色（左にチャンネル一覧と停止、右に映像、下に再生中のものと受信状態）
+- `Sources/CoaxPlayer/StreamTee.swift` — coax の出力を mpv へ中継し、録画中はファイルにも書く
 - `scripts/fake-coax.sh` — 動作確認用の coax の代わり（stats と番組の行も出す）
 - `scripts/build-deps.sh` — libmpv と依存ライブラリのビルド
 - `scripts/bundle.sh` — `.app` の組み立て
@@ -89,6 +91,16 @@ FAKE_TS=/path/to/file.ts swift run CoaxPlayer --coax "$PWD/scripts/fake-coax.sh"
 - OpenGL は macOS で非推奨で、NSOpenGLView/CGL のコンテキスト管理とスレッドの扱いが増える。SW なら描画キュー 1 本と CALayer だけで済む
 - 拡大はレイヤの補間に任せるので、ウィンドウサイズを変えても再描画は要らない
 - 描く先を IOSurface にしてコピーをなくし、CPU での拡大（フルセグの 1440→1920）は `sws-scaler=bilinear` にした。フルセグ相当（MPEG-2 1440x1080i、15Mbps）で M4 Pro の 1 コアの約 26%（デコード自体は約 2%）
+
+## 録画
+
+再生中は左の「録画」で録画を始め、「録画停止」・停止・チャンネル切替・終了で止まる。
+
+1. `coax tune` の出力はアプリが読んで mpv へ中継していて（`StreamTee.swift`）、録画中は同じバイト列を `~/Movies/coax/日時_リモコンの番号_局名_番組名.ts` にも書く。受信したままの TS なので、字幕や番組情報も残る
+2. 止めたら、同梱の ffmpeg で主音声だけの MP4（同じ名前の `.mp4`）を作る。映像はそのまま、音声はデュアルモノなら主音声だけにして AAC（128 kbps）にし直す。入れる映像と音声は、止めた時点で再生していたものの PID で選ぶ（フルセグも届いているときに、スクランブルのかかった方を選ばないため）。TS は残す
+3. 録画中に MP4 を直接書かないのは、MP4 は最後に目次（moov）を書くので、途中で落ちると全体が読めなくなるため
+
+MP4 には ARIB の字幕は入らない。フルセグはスクランブルされたままなので、MP4 にしても見られない。
 
 ## 音声
 
