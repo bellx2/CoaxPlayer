@@ -91,6 +91,10 @@ struct ContentView: View {
                         }
                         Spacer().frame(height: 8)
                         ListButton(label: "停止", active: false) { model.stop() }
+                        if model.enhanceAvailable {
+                            // ワンセグのような小さな映像を、ノイズ除去と超解像で拡大する
+                            ListButton(label: "高精細化", active: model.enhance) { model.enhance.toggle() }
+                        }
                     }
                 }
                 .padding(8)

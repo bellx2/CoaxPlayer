@@ -39,6 +39,15 @@ final class PlayerModel: ObservableObject {
     /// スキャンする範囲。ScanRange.all と同じ並び
     @Published var ranges = [true, false, false]
     @Published private(set) var scanning = false
+    /// この Mac と OS で高精細化が使えるか。使えなければボタンを出さない
+    let enhanceAvailable = enhancerAvailable()
+    /// 高精細化（ノイズ除去と超解像）。次の起動にも引き継ぐ
+    @Published var enhance: Bool {
+        didSet {
+            UserDefaults.standard.set(enhance, forKey: "enhance")
+            player.setEnhance(enhance && enhanceAvailable)
+        }
+    }
 
     let config: Config
     let player: MPVPlayer
@@ -49,6 +58,8 @@ final class PlayerModel: ObservableObject {
     init(config: Config) {
         self.config = config
         player = MPVPlayer(debug: config.debug)
+        enhance = UserDefaults.standard.object(forKey: "enhance") as? Bool ?? true
+        player.setEnhance(enhance && enhanceAvailable)
         channels = (try? ScanFile.load(config.scanPath)) ?? []
         if channels.isEmpty {
             status = "チャンネル一覧がありません。範囲を選んでスキャンしてください"
@@ -203,7 +214,7 @@ final class PlayerModel: ObservableObject {
                 let pos = p.doubleProperty("time-pos").map { String(format: "%.2f", $0) } ?? "-"
                 let fps = p.doubleProperty("estimated-vf-fps").map { String(format: "%.2f", $0) } ?? "-"
                 let w = p.int64Property("dwidth") ?? 0, h = p.int64Property("dheight") ?? 0
-                let line = "debug: time-pos=\(pos) estimated-vf-fps=\(fps) size=\(w)x\(h) rendered=\(p.renderedFrames) luma=\(p.lastLuma) layer=\(Int(p.layer.bounds.width))x\(Int(p.layer.bounds.height)) contents=\(p.layer.contents != nil) gravity=\(p.layer.contentsGravity.rawValue) windows=\(NSApp.windows.filter(\.isVisible).count) tuner-pid=\(self.tuner?.pid ?? 0)\n"
+                let line = "debug: time-pos=\(pos) estimated-vf-fps=\(fps) size=\(w)x\(h) rendered=\(p.renderedFrames) enhanced=\(p.enhancedFrames) luma=\(p.lastLuma) layer=\(Int(p.layer.bounds.width))x\(Int(p.layer.bounds.height)) contents=\(p.layer.contents != nil) gravity=\(p.layer.contentsGravity.rawValue) windows=\(NSApp.windows.filter(\.isVisible).count) tuner-pid=\(self.tuner?.pid ?? 0)\n"
                 FileHandle.standardError.write(Data(line.utf8))
             }
         }

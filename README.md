@@ -56,6 +56,7 @@ FAKE_TS=/path/to/file.ts swift run CoaxPlayer --coax "$PWD/scripts/fake-coax.sh"
 
 - `Sources/CMpv` — libmpv の system library target（`module.modulemap`。ヘッダーとライブラリの場所は `Package.swift` で `.deps/prefix` を指定）
 - `Sources/CoaxPlayer/MPVPlayer.swift` — libmpv の初期化、ソフトウェアレンダラでの描画、イベント処理
+- `Sources/CoaxPlayer/Enhancer.swift` — 高精細化（ノイズ除去と超解像、macOS 26 以降）
 - `Sources/CoaxPlayer/CoaxProcess.swift` — `coax tune` と `coax scan` の子プロセス。stdout を fd で返し（tune は mpv へ）、stderr を 1 行ずつ通知
 - `Sources/CoaxPlayer/Channels.swift` — `scan.json` から受信できたチャンネルを読む。スキャンで選べる範囲
 - `Sources/CoaxPlayer/PlayerModel.swift` — 起動引数、再生・停止、受信状態の保持
@@ -72,7 +73,7 @@ FAKE_TS=/path/to/file.ts swift run CoaxPlayer --coax "$PWD/scripts/fake-coax.sh"
 
 1. 一覧のチャンネルを押すと `coax tune --ch N --stats` を起動する。stdout のパイプを `dup` して `fdclose://N` として mpv に渡す（mpv が読み終えたら閉じる）
 2. stderr の行を画面下に表示する（最新の 1 行をそのまま。coax がエラーで終わったときはそのメッセージが残る）
-3. mpv は `vo=libmpv` + ソフトウェアレンダラ（`MPV_RENDER_API_TYPE_SW`）で、映像の表示サイズのまま `rgb0` で描く。描いたフレームを CGImage にして CALayer の contents に入れ、拡大縮小は CALayer（resizeAspect）に任せる
+3. mpv は `vo=libmpv` + ソフトウェアレンダラ（`MPV_RENDER_API_TYPE_SW`）で、映像の表示サイズのまま `bgra` で、IOSurface 付きの CVPixelBuffer に直接描く。それをそのまま CALayer の contents にし、拡大縮小は CALayer（縦横比を保つ）に任せる。高精細化がオンなら、その前に下の処理をかける
 4. 「停止」・チャンネル切替・ウィンドウを閉じる・Ctrl-C/SIGTERM では、子プロセスへ SIGTERM を送り、3 秒で終わらなければ SIGKILL して終了を待つ
 
 低ビットレートのワンセグで表示開始を早めるため、mpv は `demuxer-lavf-probesize=200000`、`demuxer-lavf-analyzeduration=0.5`、`cache=no`、`profile=low-latency` で動かす。
@@ -84,6 +85,18 @@ FAKE_TS=/path/to/file.ts swift run CoaxPlayer --coax "$PWD/scripts/fake-coax.sh"
 - 対象がワンセグ（320x180、15fps）で、CPU で描いても負荷が小さい
 - OpenGL は macOS で非推奨で、NSOpenGLView/CGL のコンテキスト管理とスレッドの扱いが増える。SW なら描画キュー 1 本と CALayer だけで済む
 - 拡大はレイヤの補間に任せるので、ウィンドウサイズを変えても再描画は要らない
+- 描く先を IOSurface にしてコピーをなくし、CPU での拡大（フルセグの 1440→1920）は `sws-scaler=bilinear` にした。フルセグ相当（MPEG-2 1440x1080i、15Mbps）で M4 Pro の 1 コアの約 26%（デコード自体は約 2%）
+
+## 高精細化（macOS 26 以降）
+
+左の「高精細化」がオンのとき、ワンセグのような小さな映像を VideoToolbox で次のように処理してから表示する。設定は次回の起動にも引き継ぐ。
+
+1. 時間方向のノイズ除去（`VTTemporalNoiseFilter`、強さ 0.5）。遅れが出ないよう、後ろのフレームは待たず直前の 1 フレームだけを参照する
+2. 低遅延の超解像（`VTLowLatencySuperResolutionScaler`）。対応する一番大きな倍率で拡大する（ワンセグは 4 倍の 1280x720）
+
+- 処理は 1 フレームあたり 3 ms 前後。ワンセグでの CPU 使用率は 1 コアの約 6% から約 11% になる（M4 Pro）
+- 超解像が対応しない大きさ（フルセグなど）や、macOS 25 以前では何もしない。使えない Mac ではボタン自体を出さない
+- 実装は `Sources/CoaxPlayer/Enhancer.swift`
 
 ## 既知の制限
 

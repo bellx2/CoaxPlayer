@@ -21,6 +21,13 @@ final class MPVPlayer {
     private var surfaceIndex = 0
     private(set) var renderCount = 0
     private var luma = 0
+    /// 高精細化するか。使えない環境や大きな映像では、オンでも何もしない
+    private var enhance = false
+    /// 高精細化の処理（macOS 26 以降の Enhancer）。映像の大きさが変わったら作り直す
+    private var enhancer: AnyObject?
+    /// enhancer を作れなかった大きさ。毎フレーム作り直そうとしないよう覚えておく
+    private var enhancerUnsupported: (Int, Int)?
+    private var enhancedCount = 0
 
     /// 再生の終了（EOF・エラー・stop）を通知する。メインスレッドで呼ぶ
     var onEndFile: ((String) -> Void)?
@@ -79,7 +86,17 @@ final class MPVPlayer {
 
     /// URL（ファイルパスや fdclose://N）を再生する
     func load(_ url: String) {
+        // 別の映像になるので、ノイズ除去が前の映像のフレームを参照しないよう作り直す
+        renderQueue.async { self.enhancer = nil }
         command(["loadfile", url, "replace"])
+    }
+
+    /// 高精細化（ノイズ除去と超解像）を使うか
+    func setEnhance(_ on: Bool) {
+        renderQueue.async {
+            self.enhance = on
+            self.enhancer = nil
+        }
     }
 
     func stop() {
@@ -100,6 +117,8 @@ final class MPVPlayer {
     }
 
     var renderedFrames: Int { renderQueue.sync { renderCount } }
+    /// 検証用: 高精細化して表示したフレーム数
+    var enhancedFrames: Int { renderQueue.sync { enhancedCount } }
     /// 検証用: 直近に描いたフレームの平均輝度（0-255）。真っ黒でないことの確認に使う
     var lastLuma: Int { renderQueue.sync { luma } }
 
@@ -177,13 +196,34 @@ final class MPVPlayer {
         }
         renderCount += 1
 
-        guard let ioSurface = CVPixelBufferGetIOSurface(surface)?.takeUnretainedValue() else { return }
+        let shown = enhanced(surface, width: Int(w), height: Int(h)) ?? surface
+        guard let ioSurface = CVPixelBufferGetIOSurface(shown)?.takeUnretainedValue() else { return }
         DispatchQueue.main.async { [layer] in
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             layer.contents = ioSurface
             CATransaction.commit()
         }
+    }
+
+    /// 高精細化した結果。使わない・使えないときは nil で、そのまま表示する
+    private func enhanced(_ surface: CVPixelBuffer, width: Int, height: Int) -> CVPixelBuffer? {
+        guard enhance, #available(macOS 26.0, *) else { return nil }
+        if let current = enhancer as? Enhancer, current.width != width || current.height != height {
+            enhancer = nil
+        }
+        if enhancer == nil {
+            if let unsupported = enhancerUnsupported, unsupported == (width, height) { return nil }
+            enhancer = Enhancer(width: width, height: height)
+            if enhancer == nil {
+                enhancerUnsupported = (width, height)
+                if debug { log("高精細化は \(width)x\(height) には使えない") }
+                return nil
+            }
+        }
+        guard let result = (enhancer as? Enhancer)?.process(surface) else { return nil }
+        enhancedCount += 1
+        return result
     }
 
     /// 次に描く CVPixelBuffer。大きさが変わったら作り直す
