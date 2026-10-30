@@ -42,15 +42,6 @@ final class PlayerModel: ObservableObject {
     /// スキャンする範囲。ScanRange.all と同じ並び
     @Published var ranges = [true, false, false]
     @Published private(set) var scanning = false
-    /// この Mac と OS で高精細化が使えるか。使えなければボタンを出さない
-    let enhanceAvailable = enhancerAvailable()
-    /// 高精細化（ノイズ除去と超解像）。次の起動にも引き継ぐ
-    @Published var enhance: Bool {
-        didSet {
-            UserDefaults.standard.set(enhance, forKey: "enhance")
-            player.setEnhance(enhance && enhanceAvailable)
-        }
-    }
 
     let config: Config
     let player: MPVPlayer
@@ -61,8 +52,6 @@ final class PlayerModel: ObservableObject {
     init(config: Config) {
         self.config = config
         player = MPVPlayer(debug: config.debug)
-        enhance = UserDefaults.standard.object(forKey: "enhance") as? Bool ?? true
-        player.setEnhance(enhance && enhanceAvailable)
         channels = (try? ScanFile.load(config.scanPath)) ?? []
         if channels.isEmpty {
             status = "チャンネル一覧がありません。範囲を選んでスキャンしてください"

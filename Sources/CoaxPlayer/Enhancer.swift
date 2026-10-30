@@ -125,9 +125,3 @@ final class Enhancer {
         return to
     }
 }
-
-/// この Mac と OS で高精細化が使えるか
-func enhancerAvailable() -> Bool {
-    guard #available(macOS 26.0, *) else { return false }
-    return VTTemporalNoiseFilterConfiguration.isSupported && VTLowLatencySuperResolutionScalerConfiguration.isSupported
-}

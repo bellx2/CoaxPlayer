@@ -76,7 +76,7 @@ FAKE_TS=/path/to/file.ts swift run CoaxPlayer --coax "$PWD/scripts/fake-coax.sh"
 
 1. 一覧のチャンネルを押すと `coax tune --ch N --stats --program` を起動する。stdout のパイプを `dup` して `fdclose://N` として mpv に渡す（mpv が読み終えたら閉じる）
 2. stderr の行を画面下に表示する。`now`・`next` の行（`--program`）は「今」「次」の番組として、それ以外は受信状態として最新の 1 行をそのまま出す（coax がエラーで終わったときはそのメッセージが残る）
-3. mpv は `vo=libmpv` + ソフトウェアレンダラ（`MPV_RENDER_API_TYPE_SW`）で、映像の表示サイズのまま `bgra` で、IOSurface 付きの CVPixelBuffer に直接描く。それをそのまま CALayer の contents にし、拡大縮小は CALayer（縦横比を保つ）に任せる。高精細化がオンなら、その前に下の処理をかける
+3. mpv は `vo=libmpv` + ソフトウェアレンダラ（`MPV_RENDER_API_TYPE_SW`）で、映像の表示サイズのまま `bgra` で、IOSurface 付きの CVPixelBuffer に直接描く。それをそのまま CALayer の contents にし、拡大縮小は CALayer（縦横比を保つ）に任せる。高精細化できるときは、その前に下の処理をかける
 4. 「停止」・チャンネル切替・ウィンドウを閉じる・Ctrl-C/SIGTERM では、子プロセスへ SIGTERM を送り、3 秒で終わらなければ SIGKILL して終了を待つ
 
 低ビットレートのワンセグで表示開始を早めるため、mpv は `demuxer-lavf-probesize=200000`、`demuxer-lavf-analyzeduration=0.5`、`cache=no`、`profile=low-latency` で動かす。
@@ -96,13 +96,13 @@ FAKE_TS=/path/to/file.ts swift run CoaxPlayer --coax "$PWD/scripts/fake-coax.sh"
 
 ## 高精細化（macOS 26 以降）
 
-左の「高精細化」がオンのとき、ワンセグのような小さな映像を VideoToolbox で次のように処理してから表示する。設定は次回の起動にも引き継ぐ。
+ワンセグのような小さな映像は、使える環境なら常に VideoToolbox で次のように処理してから表示する（切り替えの設定は無い）。
 
 1. 時間方向のノイズ除去（`VTTemporalNoiseFilter`、強さ 0.5）。遅れが出ないよう、後ろのフレームは待たず直前の 1 フレームだけを参照する
 2. 低遅延の超解像（`VTLowLatencySuperResolutionScaler`）。対応する一番大きな倍率で拡大する（ワンセグは 4 倍の 1280x720）
 
 - 処理は 1 フレームあたり 3 ms 前後。ワンセグでの CPU 使用率は 1 コアの約 6% から約 11% になる（M4 Pro）
-- 超解像が対応しない大きさ（フルセグなど）や、macOS 25 以前では何もしない。使えない Mac ではボタン自体を出さない
+- 超解像が対応しない大きさ（フルセグなど）や、macOS 25 以前、対応しない Mac では何もしない
 - 実装は `Sources/CoaxPlayer/Enhancer.swift`
 
 ## coax の版

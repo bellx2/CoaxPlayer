@@ -21,8 +21,6 @@ final class MPVPlayer {
     private var surfaceIndex = 0
     private(set) var renderCount = 0
     private var luma = 0
-    /// 高精細化するか。使えない環境や大きな映像では、オンでも何もしない
-    private var enhance = false
     /// 高精細化の処理（macOS 26 以降の Enhancer）。映像の大きさが変わったら作り直す
     private var enhancer: AnyObject?
     /// enhancer を作れなかった大きさ。毎フレーム作り直そうとしないよう覚えておく
@@ -94,13 +92,6 @@ final class MPVPlayer {
         command(["loadfile", url, "replace"])
     }
 
-    /// 高精細化（ノイズ除去と超解像）を使うか
-    func setEnhance(_ on: Bool) {
-        renderQueue.async {
-            self.enhance = on
-            self.enhancer = nil
-        }
-    }
 
     func stop() {
         command(["stop"])
@@ -209,9 +200,9 @@ final class MPVPlayer {
         }
     }
 
-    /// 高精細化した結果。使わない・使えないときは nil で、そのまま表示する
+    /// 高精細化（ノイズ除去と超解像）した結果。使えない環境や大きな映像では nil で、そのまま表示する
     private func enhanced(_ surface: CVPixelBuffer, width: Int, height: Int) -> CVPixelBuffer? {
-        guard enhance, #available(macOS 26.0, *) else { return nil }
+        guard #available(macOS 26.0, *) else { return nil }
         if let current = enhancer as? Enhancer, current.width != width || current.height != height {
             enhancer = nil
         }
