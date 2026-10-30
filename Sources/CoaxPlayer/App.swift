@@ -86,7 +86,8 @@ struct ContentView: View {
                         ForEach(model.channels) { channel in
                             ListButton(
                                 label: "\(String(repeating: " ", count: max(0, 3 - channel.channel.count)))\(channel.channel)  \(channel.name)",
-                                active: model.playingChannel == channel.channel
+                                active: model.playingChannel == channel.channel,
+                                badge: channel.logo
                             ) { model.play(channel) }
                         }
                         Spacer().frame(height: 8)
@@ -115,6 +116,13 @@ struct ContentView: View {
                 }
                 VStack(alignment: .leading, spacing: 0) {
                     Text(model.playing ?? "")
+                    if let now = model.nowProgram {
+                        Text("今　\(now)").lineLimit(1).truncationMode(.tail)
+                    }
+                    if let next = model.nextProgram {
+                        Text("次　\(next)").lineLimit(1).truncationMode(.tail)
+                            .foregroundStyle(Color.placeholder)
+                    }
                     Text(model.status)
                         .lineLimit(1)
                         .truncationMode(.tail)
@@ -136,12 +144,22 @@ struct ContentView: View {
 struct ListButton: View {
     let label: String
     let active: Bool
+    /// 名前の前に枠付きで出す短い文字（簡易ロゴ）
+    var badge: String? = nil
     let action: () -> Void
     @State private var hovering = false
 
     var body: some View {
-        Text(label)
-            .lineLimit(1)
+        HStack(spacing: 6) {
+            if let badge {
+                Text(badge)
+                    .font(.system(size: 10, weight: .semibold))
+                    .padding(.horizontal, 3)
+                    .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.text.opacity(0.6)))
+            }
+            Text(label)
+                .lineLimit(1)
+        }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)

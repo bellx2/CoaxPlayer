@@ -61,7 +61,7 @@ FAKE_TS=/path/to/file.ts swift run CoaxPlayer --coax "$PWD/scripts/fake-coax.sh"
 - `Sources/CoaxPlayer/Channels.swift` — `scan.json` から受信できたチャンネルを読む。スキャンで選べる範囲
 - `Sources/CoaxPlayer/PlayerModel.swift` — 起動引数、再生・停止、受信状態の保持
 - `Sources/CoaxPlayer/App.swift` — SwiftUI の画面と AppDelegate（終了時の後始末）。画面は coax-gpui と同じ配置と配色（左にチャンネル一覧と停止、右に映像、下に再生中のものと受信状態）
-- `scripts/fake-coax.sh` — 動作確認用の coax の代わり
+- `scripts/fake-coax.sh` — 動作確認用の coax の代わり（stats と番組の行も出す）
 - `scripts/build-deps.sh` — libmpv と依存ライブラリのビルド
 - `scripts/bundle.sh` — `.app` の組み立て
 
@@ -71,8 +71,8 @@ FAKE_TS=/path/to/file.ts swift run CoaxPlayer --coax "$PWD/scripts/fake-coax.sh"
 
 処理の流れ:
 
-1. 一覧のチャンネルを押すと `coax tune --ch N --stats` を起動する。stdout のパイプを `dup` して `fdclose://N` として mpv に渡す（mpv が読み終えたら閉じる）
-2. stderr の行を画面下に表示する（最新の 1 行をそのまま。coax がエラーで終わったときはそのメッセージが残る）
+1. 一覧のチャンネルを押すと `coax tune --ch N --stats --program` を起動する。stdout のパイプを `dup` して `fdclose://N` として mpv に渡す（mpv が読み終えたら閉じる）
+2. stderr の行を画面下に表示する。`now`・`next` の行（`--program`）は「今」「次」の番組として、それ以外は受信状態として最新の 1 行をそのまま出す（coax がエラーで終わったときはそのメッセージが残る）
 3. mpv は `vo=libmpv` + ソフトウェアレンダラ（`MPV_RENDER_API_TYPE_SW`）で、映像の表示サイズのまま `bgra` で、IOSurface 付きの CVPixelBuffer に直接描く。それをそのまま CALayer の contents にし、拡大縮小は CALayer（縦横比を保つ）に任せる。高精細化がオンなら、その前に下の処理をかける
 4. 「停止」・チャンネル切替・ウィンドウを閉じる・Ctrl-C/SIGTERM では、子プロセスへ SIGTERM を送り、3 秒で終わらなければ SIGKILL して終了を待つ
 
@@ -97,6 +97,10 @@ FAKE_TS=/path/to/file.ts swift run CoaxPlayer --coax "$PWD/scripts/fake-coax.sh"
 - 処理は 1 フレームあたり 3 ms 前後。ワンセグでの CPU 使用率は 1 コアの約 6% から約 11% になる（M4 Pro）
 - 超解像が対応しない大きさ（フルセグなど）や、macOS 25 以前では何もしない。使えない Mac ではボタン自体を出さない
 - 実装は `Sources/CoaxPlayer/Enhancer.swift`
+
+## coax の版
+
+`coax tune` の `--stats` と `--program` を使う。どちらも fork（`bellx2/coax`）のブランチにある機能で、上流の coax にはまだ無い。`bundle.sh` の `COAX_DIR` には、それを含めてビルドした coax を渡す。
 
 ## 既知の制限
 

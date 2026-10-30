@@ -1,8 +1,10 @@
 #!/bin/sh
 # 動作確認用の coax の代わり。実チューナーを使わずに「再生」の経路を試す。
-# FAKE_TS の TS を stdout へ流し、stats 風の行を 1 秒ごとに stderr へ出す。
+# FAKE_TS の TS を stdout へ流し、stats 風の行を 1 秒ごとに、番組の行（--program 相当）を最初に一度 stderr へ出す。
 : "${FAKE_TS:?FAKE_TS に TS ファイルのパスを指定してください}"
 n=0
+echo "$(date +%H:%M:%S) now 21:00-22:00 テスト番組（今）" >&2
+echo "$(date +%H:%M:%S) next 22:00-22:30 テスト番組（次）" >&2
 ( while :; do
     n=$((n + 1))
     echo "$(date +%H:%M:%S) locked  CNR 17.4dB  -77dBm  0.51 Mbps  dropped 0 (+0)  fake $n  args: $*" >&2

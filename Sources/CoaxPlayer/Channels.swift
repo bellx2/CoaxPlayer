@@ -5,6 +5,8 @@ struct Channel: Identifiable {
     /// `coax tune --ch` に渡す名前
     let channel: String
     let name: String
+    /// 簡易ロゴ（ワンセグ向けに、ロゴ画像の代わりに送られる局名の短い文字）。古い scan.json には無い
+    let logo: String?
 
     var id: String { channel }
 }
@@ -44,7 +46,10 @@ enum ScanFile {
             let transport = analysis?["transport"] as? [String: Any]
             let services = transport?["services"] as? [[String: Any]]
             let name = services?.first?["name"] as? String ?? channel
-            return Channel(channel: channel, name: name)
+            let logo = services?.lazy
+                .compactMap { ($0["logo"] as? [String: Any])?["logo_char"] as? String }
+                .first { !$0.isEmpty }
+            return Channel(channel: channel, name: name, logo: logo)
         }
     }
 }

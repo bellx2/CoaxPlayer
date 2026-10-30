@@ -36,6 +36,9 @@ final class PlayerModel: ObservableObject {
     @Published private(set) var playingChannel: String?
     /// `--stats` やスキャンの進捗の最新の行。止まっているときやエラーのときはその旨
     @Published private(set) var status = "停止中"
+    /// 今の番組と次の番組（`--program` の行の「開始-終了 番組名」）
+    @Published private(set) var nowProgram: String?
+    @Published private(set) var nextProgram: String?
     /// スキャンする範囲。ScanRange.all と同じ並び
     @Published var ranges = [true, false, false]
     @Published private(set) var scanning = false
@@ -95,10 +98,16 @@ final class PlayerModel: ObservableObject {
     func play(_ channel: Channel) {
         stop()
 
-        let t = coax(["tune", "--ch", channel.channel, "--stats"])
+        let t = coax(["tune", "--ch", channel.channel, "--stats", "--program"])
         t.onLine = { [weak self, weak t] line in
             guard let self, let t, self.tuner === t else { return }
-            self.status = line
+            // 「時刻 now|next 開始-終了 番組名」は番組の行、それ以外は受信状態の行
+            let words = line.split(separator: " ", maxSplits: 2)
+            switch words.count == 3 ? words[1] : "" {
+            case "now": self.nowProgram = String(words[2])
+            case "next": self.nextProgram = String(words[2])
+            default: self.status = line
+            }
             if self.config.debug { FileHandle.standardError.write(Data("stats: \(line)\n".utf8)) }
         }
         // 終わっても最後の行（エラーならそのメッセージ）は残す
@@ -133,6 +142,8 @@ final class PlayerModel: ObservableObject {
         player.stop()
         playing = nil
         playingChannel = nil
+        nowProgram = nil
+        nextProgram = nil
         status = "停止中"
     }
 
@@ -154,7 +165,8 @@ final class PlayerModel: ObservableObject {
         }
 
         let s = coax([
-            "scan", "--discover=ISDBT",
+            // ロックは約 1 秒、チューナーを開いた直後でも 2.5 秒だった。既定の 5 秒だと、電波の無いチャンネルで待ちすぎる
+            "scan", "--discover=ISDBT", "--lock-timeout", "3s",
             "--include", "^(\(patterns.joined(separator: "|")))$",
             "--output", output.path,
         ])
@@ -214,7 +226,7 @@ final class PlayerModel: ObservableObject {
                 let pos = p.doubleProperty("time-pos").map { String(format: "%.2f", $0) } ?? "-"
                 let fps = p.doubleProperty("estimated-vf-fps").map { String(format: "%.2f", $0) } ?? "-"
                 let w = p.int64Property("dwidth") ?? 0, h = p.int64Property("dheight") ?? 0
-                let line = "debug: time-pos=\(pos) estimated-vf-fps=\(fps) size=\(w)x\(h) rendered=\(p.renderedFrames) enhanced=\(p.enhancedFrames) luma=\(p.lastLuma) layer=\(Int(p.layer.bounds.width))x\(Int(p.layer.bounds.height)) contents=\(p.layer.contents != nil) gravity=\(p.layer.contentsGravity.rawValue) windows=\(NSApp.windows.filter(\.isVisible).count) tuner-pid=\(self.tuner?.pid ?? 0)\n"
+                let line = "debug: time-pos=\(pos) estimated-vf-fps=\(fps) size=\(w)x\(h) rendered=\(p.renderedFrames) enhanced=\(p.enhancedFrames) luma=\(p.lastLuma) layer=\(Int(p.layer.bounds.width))x\(Int(p.layer.bounds.height)) contents=\(p.layer.contents != nil) gravity=\(p.layer.contentsGravity.rawValue) windows=\(NSApp.windows.filter(\.isVisible).count) tuner-pid=\(self.tuner?.pid ?? 0) now=\(self.nowProgram ?? "-") next=\(self.nextProgram ?? "-")\n"
                 FileHandle.standardError.write(Data(line.utf8))
             }
         }
