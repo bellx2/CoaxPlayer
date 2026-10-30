@@ -158,6 +158,9 @@ final class LayerView: NSView {
         videoLayer = layer
         super.init(frame: .zero)
         wantsLayer = true
+        // 裏のレイヤーの contentsGravity は AppKit がこれで上書きする（既定は縦横を別々に伸ばす）。
+        // 縦横比を保ったまま収める
+        layerContentsPlacement = .scaleProportionallyToFit
     }
 
     required init?(coder: NSCoder) { fatalError() }
