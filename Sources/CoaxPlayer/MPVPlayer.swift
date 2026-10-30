@@ -1,8 +1,10 @@
 import AppKit
 import CMpv
+import CoreVideo
 import Foundation
 
 /// libmpv をソフトウェアレンダラで動かし、フレームを CALayer に貼る。
+/// 描く先は IOSurface 付きの CVPixelBuffer で、そのままレイヤの contents にする（GPU と共有するのでコピーが要らない）。
 final class MPVPlayer {
     /// 映像を表示するレイヤ。NSView の layer としてそのまま使う
     let layer = CALayer()
@@ -14,7 +16,9 @@ final class MPVPlayer {
     private let eventLoopDone = DispatchSemaphore(value: 0)
 
     // 以下は renderQueue 上でのみ触る
-    private var buffer: [UInt8] = []
+    /// 描画先。表示中のものに書き込まないよう、3 枚を順に使う
+    private var surfaces: [CVPixelBuffer] = []
+    private var surfaceIndex = 0
     private(set) var renderCount = 0
     private var luma = 0
 
@@ -34,6 +38,8 @@ final class MPVPlayer {
         let options: [(String, String)] = [
             ("vo", "libmpv"),
             ("hwdec", "no"),
+            // CPU での拡大（フルセグの 1440→1920）は既定の lanczos だと重い。表示時に GPU でも拡大するので軽い方式で足りる
+            ("sws-scaler", "bilinear"),
             ("profile", "low-latency"),
             ("cache", "no"),
             ("demuxer-lavf-probesize", "200000"),
@@ -139,56 +145,81 @@ final class MPVPlayer {
               mpv_get_property(mpv, "dheight", MPV_FORMAT_INT64, &h) >= 0,
               w > 0, h > 0 else { return }
 
+        guard let surface = nextSurface(width: Int(w), height: Int(h)) else { return }
+        CVPixelBufferLockBaseAddress(surface, [])
         var size: [Int32] = [Int32(w), Int32(h)]
-        var stride = Int(w) * 4
-        if buffer.count != stride * Int(h) { buffer = [UInt8](repeating: 0, count: stride * Int(h)) }
-        var format = Array("rgb0".utf8CString)
+        var stride = CVPixelBufferGetBytesPerRow(surface)
+        // Mac の標準の並び（B,G,R,A）で描かせ、レイヤ側での並べ替えを避ける。bgra なら A も埋まる
+        var format = Array("bgra".utf8CString)
+        let pixels = CVPixelBufferGetBaseAddress(surface)
 
         let r: Int32 = size.withUnsafeMutableBufferPointer { sizePtr in
             format.withUnsafeMutableBufferPointer { formatPtr in
-                buffer.withUnsafeMutableBytes { pixels in
-                    withUnsafeMutablePointer(to: &stride) { stridePtr in
-                        var params = [
-                            mpv_render_param(type: MPV_RENDER_PARAM_SW_SIZE, data: UnsafeMutableRawPointer(sizePtr.baseAddress)),
-                            mpv_render_param(type: MPV_RENDER_PARAM_SW_FORMAT, data: UnsafeMutableRawPointer(formatPtr.baseAddress)),
-                            mpv_render_param(type: MPV_RENDER_PARAM_SW_STRIDE, data: UnsafeMutableRawPointer(stridePtr)),
-                            mpv_render_param(type: MPV_RENDER_PARAM_SW_POINTER, data: pixels.baseAddress),
-                            mpv_render_param(type: MPV_RENDER_PARAM_INVALID, data: nil),
-                        ]
-                        return mpv_render_context_render(renderContext, &params)
-                    }
+                withUnsafeMutablePointer(to: &stride) { stridePtr in
+                    var params = [
+                        mpv_render_param(type: MPV_RENDER_PARAM_SW_SIZE, data: UnsafeMutableRawPointer(sizePtr.baseAddress)),
+                        mpv_render_param(type: MPV_RENDER_PARAM_SW_FORMAT, data: UnsafeMutableRawPointer(formatPtr.baseAddress)),
+                        mpv_render_param(type: MPV_RENDER_PARAM_SW_STRIDE, data: UnsafeMutableRawPointer(stridePtr)),
+                        mpv_render_param(type: MPV_RENDER_PARAM_SW_POINTER, data: pixels),
+                        mpv_render_param(type: MPV_RENDER_PARAM_INVALID, data: nil),
+                    ]
+                    return mpv_render_context_render(renderContext, &params)
                 }
             }
         }
+        if r >= 0 && debug && renderCount % 15 == 0, let pixels {
+            luma = averageLuma(pixels, width: Int(w), height: Int(h), stride: stride)
+        }
+        CVPixelBufferUnlockBaseAddress(surface, [])
         guard r >= 0 else {
             log("描画失敗: \(String(cString: mpv_error_string(r)))")
             return
         }
         renderCount += 1
-        if debug && renderCount % 15 == 0 { luma = averageLuma() }
 
-        // rgb0 は R,G,B,未使用 の順のバイト列
-        guard let provider = CGDataProvider(data: Data(buffer) as CFData),
-              let image = CGImage(
-                width: Int(w), height: Int(h), bitsPerComponent: 8, bitsPerPixel: 32,
-                bytesPerRow: stride, space: CGColorSpaceCreateDeviceRGB(),
-                bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
-                provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
-        else { return }
+        guard let ioSurface = CVPixelBufferGetIOSurface(surface)?.takeUnretainedValue() else { return }
         DispatchQueue.main.async { [layer] in
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            layer.contents = image
+            layer.contents = ioSurface
             CATransaction.commit()
         }
     }
 
-    private func averageLuma() -> Int {
-        var sum = 0
-        for i in Swift.stride(from: 0, to: buffer.count, by: 4) {
-            sum += (Int(buffer[i]) * 3 + Int(buffer[i + 1]) * 6 + Int(buffer[i + 2])) / 10
+    /// 次に描く CVPixelBuffer。大きさが変わったら作り直す
+    private func nextSurface(width: Int, height: Int) -> CVPixelBuffer? {
+        if let first = surfaces.first,
+           CVPixelBufferGetWidth(first) != width || CVPixelBufferGetHeight(first) != height {
+            surfaces = []
         }
-        return sum / max(1, buffer.count / 4)
+        if surfaces.isEmpty {
+            let attributes: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary]
+            for _ in 0..<3 {
+                var buffer: CVPixelBuffer?
+                CVPixelBufferCreate(nil, width, height, kCVPixelFormatType_32BGRA, attributes as CFDictionary, &buffer)
+                guard let buffer else {
+                    log("CVPixelBuffer を作れません (\(width)x\(height))")
+                    surfaces = []
+                    return nil
+                }
+                surfaces.append(buffer)
+            }
+        }
+        surfaceIndex = (surfaceIndex + 1) % surfaces.count
+        return surfaces[surfaceIndex]
+    }
+
+    private func averageLuma(_ pixels: UnsafeMutableRawPointer, width: Int, height: Int, stride: Int) -> Int {
+        let bytes = pixels.assumingMemoryBound(to: UInt8.self)
+        var sum = 0
+        for y in 0..<height {
+            let row = bytes + y * stride
+            for x in Swift.stride(from: 0, to: width * 4, by: 4) {
+                // B,G,R,A の順
+                sum += (Int(row[x + 2]) * 3 + Int(row[x + 1]) * 6 + Int(row[x])) / 10
+            }
+        }
+        return sum / max(1, width * height)
     }
 
     private func eventLoop() {
