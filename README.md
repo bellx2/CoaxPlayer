@@ -31,23 +31,24 @@ GPL の部品を含めないので、同梱するライブラリは LGPL など�
 ## 実行
 
 ```sh
-# 画面からチャンネルを入れて「再生」
-swift run CoaxPlayer --coax /Users/bell/dev/t7b/coax/coax
+# 左の一覧（scan.json の受信できたチャンネル）から選んで再生する
+swift run CoaxPlayer --coax /Users/bell/dev/t7b/coax/coax --scan /Users/bell/dev/t7b/coax/scan.json
 
 # 起動と同時にチャンネルを選ぶ
-swift run CoaxPlayer --coax /Users/bell/dev/t7b/coax/coax --ch 27
+swift run CoaxPlayer --coax /Users/bell/dev/t7b/coax/coax --scan /Users/bell/dev/t7b/coax/scan.json --ch 27
 
 # 録画した TS ファイルを再生する（検証用）
 swift run CoaxPlayer /path/to/file.ts
 
-# チューナーを使わずに「再生」の経路を試す（coax の代わりに TS を流すスクリプト）
-FAKE_TS=/path/to/file.ts swift run CoaxPlayer --coax "$PWD/scripts/fake-coax.sh" --ch 27
+# チューナーを使わずに選局の経路を試す（coax の代わりに TS を流すスクリプト）
+FAKE_TS=/path/to/file.ts swift run CoaxPlayer --coax "$PWD/scripts/fake-coax.sh" --scan /path/to/scan.json --ch 27
 ```
 
 | 引数 | 意味 |
 | --- | --- |
 | `--coax <path>` | 起動する coax のパス。省略時は実行ファイルと同じ場所の `coax`、無ければ PATH 上の `coax` |
-| `--ch <n>` | 起動直後にこのチャンネルを再生する |
+| `--scan <path>` | チャンネル一覧にする `coax scan` の結果。無ければここに作る。省略時は `~/Library/Application Support/coax-player/scan.json`（coax-gpui と共通） |
+| `--ch <n>` | 起動直後にこのチャンネルを再生する（`scan.json` にあるもの） |
 | `--debug` | mpv のログと、1 秒ごとの状態（time-pos、描画フレーム数、平均輝度など）を stderr に出す |
 | `<file>` | ファイルを再生する（`--ch` が無いとき） |
 
@@ -55,17 +56,22 @@ FAKE_TS=/path/to/file.ts swift run CoaxPlayer --coax "$PWD/scripts/fake-coax.sh"
 
 - `Sources/CMpv` — libmpv の system library target（`module.modulemap`。ヘッダーとライブラリの場所は `Package.swift` で `.deps/prefix` を指定）
 - `Sources/CoaxPlayer/MPVPlayer.swift` — libmpv の初期化、ソフトウェアレンダラでの描画、イベント処理
-- `Sources/CoaxPlayer/TunerProcess.swift` — `coax tune --ch N --stats` の子プロセス。stdout を mpv へ、stderr を 1 行ずつ通知
+- `Sources/CoaxPlayer/CoaxProcess.swift` — `coax tune` と `coax scan` の子プロセス。stdout を fd で返し（tune は mpv へ）、stderr を 1 行ずつ通知
+- `Sources/CoaxPlayer/Channels.swift` — `scan.json` から受信できたチャンネルを読む。スキャンで選べる範囲
 - `Sources/CoaxPlayer/PlayerModel.swift` — 起動引数、再生・停止、受信状態の保持
-- `Sources/CoaxPlayer/App.swift` — SwiftUI の画面と AppDelegate（終了時の後始末）
+- `Sources/CoaxPlayer/App.swift` — SwiftUI の画面と AppDelegate（終了時の後始末）。画面は coax-gpui と同じ配置と配色（左にチャンネル一覧と停止、右に映像、下に再生中のものと受信状態）
 - `scripts/fake-coax.sh` — 動作確認用の coax の代わり
 - `scripts/build-deps.sh` — libmpv と依存ライブラリのビルド
 - `scripts/bundle.sh` — `.app` の組み立て
 
+`scan.json` が無いとき（または受信できたチャンネルが1つも無いとき）は、左にスキャンする範囲（地上 UHF 13〜62、地上 VHF 1〜12、ケーブル C13〜C63）が並ぶ。
+範囲を選んで「スキャン開始」を押すと `coax scan --discover=ISDBT --include '^(選んだ範囲)$' --output <--scan のパス>` を実行し、終わると一覧を読み込む。
+実行中は画面下に進捗の行を出し、「スキャン中止」で止められる（coax は進捗を残すので、次は続きから）。
+
 処理の流れ:
 
-1. 「再生」で `coax tune --ch N --stats` を起動する。stdout のパイプを `dup` して `fdclose://N` として mpv に渡す（mpv が読み終えたら閉じる）
-2. stderr の行を受信状態バーに表示する（最新の 1 行をそのまま）
+1. 一覧のチャンネルを押すと `coax tune --ch N --stats` を起動する。stdout のパイプを `dup` して `fdclose://N` として mpv に渡す（mpv が読み終えたら閉じる）
+2. stderr の行を画面下に表示する（最新の 1 行をそのまま。coax がエラーで終わったときはそのメッセージが残る）
 3. mpv は `vo=libmpv` + ソフトウェアレンダラ（`MPV_RENDER_API_TYPE_SW`）で、映像の表示サイズのまま `rgb0` で描く。描いたフレームを CGImage にして CALayer の contents に入れ、拡大縮小は CALayer（resizeAspect）に任せる
 4. 「停止」・チャンネル切替・ウィンドウを閉じる・Ctrl-C/SIGTERM では、子プロセスへ SIGTERM を送り、3 秒で終わらなければ SIGKILL して終了を待つ
 
@@ -88,3 +94,6 @@ FAKE_TS=/path/to/file.ts swift run CoaxPlayer --coax "$PWD/scripts/fake-coax.sh"
 - `estimated-vf-fps` は SW 描画では取れない（`--debug` では描画フレーム数を代わりに出す）
 - Apple Silicon（arm64）のみ。Intel Mac 向けのユニバーサルバイナリは作っていない
 - アイコン・メニューは最小限
+- 文字入力の欄は無く、チャンネルは `scan.json` にあるものからしか選べない（coax-gpui とそろえた）
+- スキャンできるのは地上波とケーブル（ISDB-T のチューナー）だけ。衛星（ISDB-S）の範囲はまだ無い
+- `scan.json` を作り直す画面は無い。作り直すときはファイルを消してから起動する

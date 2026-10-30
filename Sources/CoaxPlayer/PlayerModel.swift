@@ -1,9 +1,10 @@
 import AppKit
 
 /// 起動引数。
-///   CoaxPlayer [--coax <path>] [--ch <n>] [--debug] [<ts file>]
+///   CoaxPlayer [--coax <path>] [--scan <path>] [--ch <n>] [--debug] [<ts file>]
 struct Config {
     var coaxPath: String?
+    var scanPath = ScanFile.defaultPath
     var channel: String?
     var file: String?
     var debug = false
@@ -14,6 +15,7 @@ struct Config {
         while let a = it.next() {
             switch a {
             case "--coax": c.coaxPath = it.next()
+            case "--scan": c.scanPath = it.next() ?? c.scanPath
             case "--ch": c.channel = it.next()
             case "--debug": c.debug = true
             default:
@@ -27,81 +29,90 @@ struct Config {
 
 @MainActor
 final class PlayerModel: ObservableObject {
-    @Published var channel = "27"
-    @Published var stats = ""
-    @Published var status = "停止中"
-    @Published var playing = false
+    @Published private(set) var channels: [Channel] = []
+    /// 再生中のチャンネル（"27 ＮＨＫ総合１・東京"）かファイル名
+    @Published private(set) var playing: String?
+    /// 再生中のチャンネル名。一覧で強調する
+    @Published private(set) var playingChannel: String?
+    /// `--stats` やスキャンの進捗の最新の行。止まっているときやエラーのときはその旨
+    @Published private(set) var status = "停止中"
+    /// スキャンする範囲。ScanRange.all と同じ並び
+    @Published var ranges = [true, false, false]
+    @Published private(set) var scanning = false
 
     let config: Config
     let player: MPVPlayer
-    private var tuner: TunerProcess?
+    private var tuner: CoaxProcess?
+    private var scanner: CoaxProcess?
     private var debugTimer: Timer?
 
     init(config: Config) {
         self.config = config
         player = MPVPlayer(debug: config.debug)
-        player.onEndFile = { [weak self] reason in
-            guard let self, reason != "停止" else { return }
-            self.status = reason
+        channels = (try? ScanFile.load(config.scanPath)) ?? []
+        if channels.isEmpty {
+            status = "チャンネル一覧がありません。範囲を選んでスキャンしてください"
         }
         if config.debug { startDebugLog() }
     }
 
     /// 起動引数でファイルかチャンネルが渡されていれば再生を始める
     func startFromArguments() {
-        if let ch = config.channel {
-            channel = ch
-            playChannel()
-            return
+        if let file = config.file {
+            playFile(file)
+        } else if let ch = config.channel {
+            if let channel = channels.first(where: { $0.channel == ch }) {
+                play(channel)
+            } else {
+                status = "\(ch) は scan.json にありません"
+            }
         }
-        guard let file = config.file else { return }
-        status = "ファイル再生: \((file as NSString).lastPathComponent)"
-        playing = true
-        player.load(file)
     }
 
-    func playChannel() {
-        let ch = channel.trimmingCharacters(in: .whitespaces)
-        guard !ch.isEmpty else { return }
-        stop()
-
-        // --coax 未指定なら、.app に同梱した coax（実行ファイルと同じ場所）を使い、
-        // それも無ければ PATH 上の coax を env 経由で起動する（env は exec するので pid は coax のもの）
-        let exe: URL
-        var args = ["tune", "--ch", ch, "--stats"]
+    /// coax を起動するコマンド。--coax 未指定なら、.app に同梱した coax（実行ファイルと同じ場所）を使い、
+    /// それも無ければ PATH 上の coax を env 経由で起動する（env は exec するので pid は coax のもの）
+    private func coax(_ arguments: [String]) -> CoaxProcess {
         let bundled = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("coax")
         if let path = config.coaxPath {
-            exe = URL(fileURLWithPath: path)
+            return CoaxProcess(executable: URL(fileURLWithPath: path), arguments: arguments)
         } else if let bundled, FileManager.default.isExecutableFile(atPath: bundled.path) {
-            exe = bundled
-        } else {
-            exe = URL(fileURLWithPath: "/usr/bin/env")
-            args.insert("coax", at: 0)
+            return CoaxProcess(executable: bundled, arguments: arguments)
         }
+        return CoaxProcess(executable: URL(fileURLWithPath: "/usr/bin/env"), arguments: ["coax"] + arguments)
+    }
 
-        let t = TunerProcess(executable: exe, arguments: args)
-        t.onLine = { [weak self] line in
-            guard let self else { return }
-            self.stats = line
+    func play(_ channel: Channel) {
+        stop()
+
+        let t = coax(["tune", "--ch", channel.channel, "--stats"])
+        t.onLine = { [weak self, weak t] line in
+            guard let self, let t, self.tuner === t else { return }
+            self.status = line
             if self.config.debug { FileHandle.standardError.write(Data("stats: \(line)\n".utf8)) }
         }
-        t.onExit = { [weak self, weak t] code in
+        // 終わっても最後の行（エラーならそのメッセージ）は残す
+        t.onExit = { [weak self, weak t] _ in
             guard let self, let t, self.tuner === t else { return }
             self.tuner = nil
-            self.playing = false
-            self.status = "coax 終了 (status \(code))"
         }
         do {
             let fd = try t.start()
             tuner = t
-            playing = true
-            stats = ""
-            status = "ch \(ch) 再生中"
+            playing = "\(channel.channel) \(channel.name)"
+            playingChannel = channel.channel
+            status = "選局中..."
             // fdclose:// は mpv が読み終えたら fd を閉じる
             player.load("fdclose://\(fd)")
         } catch {
-            status = "起動失敗: \(error.localizedDescription)"
+            status = "coax: \(error.localizedDescription)"
         }
+    }
+
+    func playFile(_ file: String) {
+        stop()
+        playing = file
+        status = "ファイル: \(file)"
+        player.load(file)
     }
 
     func stop() {
@@ -109,8 +120,68 @@ final class PlayerModel: ObservableObject {
         tuner?.stop()
         tuner = nil
         player.stop()
-        playing = false
+        playing = nil
+        playingChannel = nil
         status = "停止中"
+    }
+
+    /// 選んだ範囲を `coax scan` で調べ、結果を scan.json に書いて一覧を読み直す
+    func startScan() {
+        let patterns = zip(ScanRange.all, ranges).filter(\.1).map(\.0.pattern)
+        guard !patterns.isEmpty else {
+            status = "範囲を選んでください"
+            return
+        }
+        stop()
+        let output = URL(fileURLWithPath: config.scanPath)
+        do {
+            try FileManager.default.createDirectory(
+                at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
+        } catch {
+            status = "\(output.deletingLastPathComponent().path): \(error.localizedDescription)"
+            return
+        }
+
+        let s = coax([
+            "scan", "--discover=ISDBT",
+            "--include", "^(\(patterns.joined(separator: "|")))$",
+            "--output", output.path,
+        ])
+        var stdout: Int32 = -1
+        // 進捗の行（[n/N] ...）とエラーだけを拾う。見つかったサービスの一覧の行は出さない
+        s.onLine = { [weak self, weak s] line in
+            guard let self, let s, self.scanner === s,
+                  line.hasPrefix("[") || line.hasPrefix("coax:") else { return }
+            self.status = line
+        }
+        s.onExit = { [weak self, weak s] code in
+            // 標準出力は使わないが、終わるまで開けておく（閉じると書き込みで落ちる）
+            close(stdout)
+            guard let self, let s, self.scanner === s else { return }
+            self.scanner = nil
+            self.scanning = false
+            // 失敗したときは最後の行（エラー）を残す
+            if code == 0 {
+                self.channels = (try? ScanFile.load(self.config.scanPath)) ?? []
+                self.status = "スキャン完了: \(self.channels.count) チャンネル"
+            }
+        }
+        do {
+            stdout = try s.start()
+            scanner = s
+            scanning = true
+            status = "スキャンを始めます..."
+        } catch {
+            status = "coax: \(error.localizedDescription)"
+        }
+    }
+
+    /// スキャンを止める。coax は進捗を残すので、次は続きから
+    func cancelScan() {
+        scanner?.stop()
+        scanner = nil
+        scanning = false
+        status = "スキャンを中止しました（次は続きから）"
     }
 
     /// アプリ終了時の後始末
@@ -118,6 +189,8 @@ final class PlayerModel: ObservableObject {
         debugTimer?.invalidate()
         tuner?.stop()
         tuner = nil
+        scanner?.stop()
+        scanner = nil
         player.destroy()
     }
 

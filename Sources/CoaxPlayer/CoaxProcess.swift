@@ -1,14 +1,14 @@
 import Foundation
 
-/// `coax tune --ch N --stats` を子プロセスとして動かす。
-/// stdout（TS）は mpv に渡す fd として返し、stderr は 1 行ずつ通知する。
-final class TunerProcess {
+/// coax のサブコマンド（`coax tune --ch N --stats`、`coax scan` など）を子プロセスとして動かす。
+/// stdout は fd として返し（tune なら TS を mpv に渡す）、stderr は 1 行ずつ通知する。
+final class CoaxProcess {
     private let process = Process()
     private let stdoutPipe = Pipe()
     private let stderrPipe = Pipe()
     private var pending = Data()
 
-    /// stderr の 1 行（stats 行など）。メインスレッドで呼ぶ
+    /// stderr の 1 行（stats や進捗の行など）。メインスレッドで呼ぶ
     var onLine: ((String) -> Void)?
     /// プロセス終了。メインスレッドで呼ぶ
     var onExit: ((Int32) -> Void)?
