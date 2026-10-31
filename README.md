@@ -1,4 +1,4 @@
-# coax-swiftui
+# coax-player
 
 [coax](https://github.com/bellx2/coax) で受信した地上デジタル放送を見るための、macOS 用のプレーヤー（SwiftUI + libmpv）。
 

@@ -33,7 +33,7 @@ add_license() {
   mkdir -p "$LICENSES/$name"
   cp "$@" "$LICENSES/$name/"
 }
-add_license coax-swiftui "$ROOT/LICENSE" "$ROOT/NOTICE"
+add_license coax-player "$ROOT/LICENSE" "$ROOT/NOTICE"
 add_license ffmpeg "$SRC/ffmpeg/COPYING.LGPLv2.1" "$SRC/ffmpeg/LICENSE.md"
 add_license mpv "$SRC/mpv/LICENSE.LGPL"
 add_license libplacebo "$SRC/libplacebo/LICENSE"
@@ -54,7 +54,7 @@ cat > "$APP/Contents/Info.plist" <<EOF
 <plist version="1.0">
 <dict>
   <key>CFBundleExecutable</key><string>$NAME</string>
-  <key>CFBundleIdentifier</key><string>jp.bellx2.coax-swiftui</string>
+  <key>CFBundleIdentifier</key><string>jp.bellx2.coax-player</string>
   <key>CFBundleName</key><string>CoaxPlayer</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
