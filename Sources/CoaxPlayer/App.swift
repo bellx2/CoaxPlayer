@@ -101,6 +101,7 @@ struct ContentView: View {
                             }
                         }
                         ListButton(label: "字幕", active: model.subtitles) { model.toggleSubtitles() }
+                        ListButton(label: "ワンセグ", active: model.oneSeg) { model.toggleOneSeg() }
                         ListButton(label: "情報", active: model.pinsInfo) { model.toggleInfo() }
                     }
                 }

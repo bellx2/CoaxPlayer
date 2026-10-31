@@ -1,9 +1,11 @@
 import AppKit
 
 /// 起動引数。
-///   CoaxPlayer [--coax <path>] [--scan <path>] [--ch <n> [--record]] [--debug] [<ts file>]
+///   CoaxPlayer [--coax <path>] [--scan <path>] [--decoder <path>] [--ch <n> [--record]] [--debug] [<ts file>]
 struct Config {
     var coaxPath: String?
+    /// 選局した TS を通す外部のデコーダー。stdin から TS を読んで stdout に書くもの
+    var decoderPath: String?
     var scanPath = ScanFile.defaultPath
     var channel: String?
     /// --ch で選局したものを、そのまま録画する
@@ -18,6 +20,7 @@ struct Config {
             switch a {
             case "--coax": c.coaxPath = it.next()
             case "--scan": c.scanPath = it.next() ?? c.scanPath
+            case "--decoder": c.decoderPath = it.next()
             case "--ch": c.channel = it.next()
             case "--record": c.record = true
             case "--debug": c.debug = true
@@ -52,6 +55,8 @@ final class PlayerModel: ObservableObject {
     @Published private(set) var scanning = false
     /// 字幕を表示するか。チャンネルを替えても保つ
     @Published private(set) var subtitles = true
+    /// フルセグを再生できるときも、ワンセグを見る
+    @Published private(set) var oneSeg = false
     /// 今の字幕。消えているときは nil。表示しないときも描いておき、切り替えたらすぐ出す
     @Published private(set) var caption: CaptionImage?
     /// 映像の縦横比（表示サイズ）
@@ -62,6 +67,15 @@ final class PlayerModel: ObservableObject {
     let config: Config
     let player: MPVPlayer
     private var tuner: CoaxProcess?
+    /// coax tune と中継の間に挟むデコーダー
+    private var decoder: CoaxProcess?
+    /// デコーダーに渡す PC/SC ソケット（coax pcsc）
+    private var pcsc: CoaxProcess?
+    /// coax pcsc がソケットを出したか。それまでの選局は pcscWaiting に取っておく
+    private var pcscReady = false
+    private var pcscWaiting: Channel?
+    private let pcscSocket = FileManager.default.temporaryDirectory
+        .appendingPathComponent("coax-player").appendingPathComponent("pcscd.comm")
     /// coax の出力を mpv へ中継し、録画中はファイルにも書く
     private var tee: StreamTee?
     /// 再生中のチャンネル。録画のファイル名に使う
@@ -83,6 +97,7 @@ final class PlayerModel: ObservableObject {
             status = "チャンネル一覧がありません。範囲を選んでスキャンしてください"
         }
         if config.debug { startDebugLog() }
+        if config.decoderPath != nil { startPCSC() }
         player.onFirstFrame = { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, self.playing != nil else { return }
@@ -108,18 +123,24 @@ final class PlayerModel: ObservableObject {
 
     /// coax を起動するコマンド。--coax 未指定なら、.app に同梱した coax（実行ファイルと同じ場所）を使い、
     /// それも無ければ PATH 上の coax を env 経由で起動する（env は exec するので pid は coax のもの）
-    private func coax(_ arguments: [String]) -> CoaxProcess {
+    private func coax(_ arguments: [String], outputLines: Bool = false) -> CoaxProcess {
         let bundled = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("coax")
         if let path = config.coaxPath {
-            return CoaxProcess(executable: URL(fileURLWithPath: path), arguments: arguments)
+            return CoaxProcess(executable: URL(fileURLWithPath: path), arguments: arguments, outputLines: outputLines)
         } else if let bundled, FileManager.default.isExecutableFile(atPath: bundled.path) {
-            return CoaxProcess(executable: bundled, arguments: arguments)
+            return CoaxProcess(executable: bundled, arguments: arguments, outputLines: outputLines)
         }
-        return CoaxProcess(executable: URL(fileURLWithPath: "/usr/bin/env"), arguments: ["coax"] + arguments)
+        return CoaxProcess(executable: URL(fileURLWithPath: "/usr/bin/env"), arguments: ["coax"] + arguments,
+                           outputLines: outputLines)
     }
 
     func play(_ channel: Channel) {
         stop()
+        if config.decoderPath != nil && !pcscReady {
+            pcscWaiting = channel
+            status = "デコーダーの準備中..."
+            return
+        }
 
         let t = coax(["tune", "--ch", channel.channel, "--stats", "--program"])
         t.onLine = { [weak self, weak t] line in
@@ -142,10 +163,19 @@ final class PlayerModel: ObservableObject {
             self.tuner = nil
         }
         do {
-            let fd = try t.start()
+            var fd = try t.start()
+            if let path = config.decoderPath {
+                let d = CoaxProcess(executable: URL(fileURLWithPath: path), arguments: [], input: fd,
+                                    environment: ["PCSCLITE_CSOCK_NAME": pcscSocket.path])
+                watchDecoder(d)
+                fd = try d.start()
+                decoder = d
+            }
             guard let tee = StreamTee(source: fd) else {
                 close(fd)
                 t.stop()
+                decoder?.stop()
+                decoder = nil
                 status = "パイプを作れません"
                 return
             }
@@ -164,11 +194,55 @@ final class PlayerModel: ObservableObject {
             playingChannel = channel.channel
             status = "選局中..."
             // fdclose:// は mpv が読み終えたら fd を閉じる
-            player.load("fdclose://\(tee.mpvFD)")
+            player.load("fdclose://\(tee.mpvFD)", decoded: decoder != nil)
             startCaptions(tee)
             tee.start()
         } catch {
             status = "coax: \(error.localizedDescription)"
+        }
+    }
+
+    /// デコーダーは、ソケットが選局より先にあることを前提にする（`coax tune --pcsc` では間に合わない）。
+    /// 起動時に coax pcsc を立てておき、終了まで残す
+    private func startPCSC() {
+        try? FileManager.default.createDirectory(at: pcscSocket.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let p = coax(["pcsc", "--socket", pcscSocket.path], outputLines: true)
+        p.onLine = { [weak self] line in
+            guard let self else { return }
+            if self.config.debug { FileHandle.standardError.write(Data("pcsc: \(line)\n".utf8)) }
+            // 「serving PC/SC on <path>」が出たらつなげる
+            guard !self.pcscReady, line.hasPrefix("serving PC/SC") else { return }
+            self.pcscReady = true
+            if let channel = self.pcscWaiting {
+                self.pcscWaiting = nil
+                self.play(channel)
+            }
+        }
+        p.onExit = { [weak self, weak p] _ in
+            guard let self, let p, self.pcsc === p else { return }
+            self.pcsc = nil
+            self.pcscReady = false
+            self.status = "coax pcsc が終了しました。フルセグは再生できません"
+        }
+        do {
+            close(try p.start())
+            pcsc = p
+        } catch {
+            status = "coax pcsc: \(error.localizedDescription)"
+        }
+    }
+
+    /// デコーダーの stderr は進み具合などで多いので、異常終了したときに最後の行だけ出す
+    private func watchDecoder(_ d: CoaxProcess) {
+        var last = ""
+        d.onLine = { [weak self] line in
+            last = line
+            if self?.config.debug == true { FileHandle.standardError.write(Data("decoder: \(line)\n".utf8)) }
+        }
+        d.onExit = { [weak self, weak d] code in
+            guard let self, let d, self.decoder === d else { return }
+            self.decoder = nil
+            if code != 0 { self.status = "デコーダーが終了しました（\(code)）: \(last)" }
         }
     }
 
@@ -184,6 +258,9 @@ final class PlayerModel: ObservableObject {
         // 先に子プロセスを止めてチューナーを解放する。中継は coax が終わると自分で閉じる
         tuner?.stop()
         tuner = nil
+        decoder?.stop()
+        decoder = nil
+        pcscWaiting = nil
         tee = nil
         current = nil
         player.stop()
@@ -238,6 +315,11 @@ final class PlayerModel: ObservableObject {
         subtitles.toggle()
     }
 
+    func toggleOneSeg() {
+        oneSeg.toggle()
+        player.prefersOneSeg = oneSeg
+    }
+
     /// 中継から字幕の PES を受け取って解読し、mpv の再生位置に合わせて描く
     private func startCaptions(_ tee: StreamTee) {
         guard let renderer = CaptionRenderer() else { return }
@@ -276,7 +358,7 @@ final class PlayerModel: ObservableObject {
         guard let url = recording else { return }
         tee?.stopRecording()
         recording = nil
-        // 再生中の映像と音声を MP4 に入れる。フルセグも届いているときに、スクランブルのかかった方を選ばないため
+        // 再生中の映像と音声を MP4 に入れる。フルセグも届いているときに、再生していない方を選ばないため
         let video = player.int64Property("current-tracks/video/src-id")
         let audio = player.int64Property("current-tracks/audio/src-id")
         convertToMP4(url, video: video, audio: audio)
@@ -399,6 +481,10 @@ final class PlayerModel: ObservableObject {
         finishRecording()
         tuner?.stop()
         tuner = nil
+        decoder?.stop()
+        decoder = nil
+        pcsc?.stop()
+        pcsc = nil
         scanner?.stop()
         scanner = nil
         player.destroy()

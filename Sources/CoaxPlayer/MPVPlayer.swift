@@ -49,6 +49,8 @@ final class MPVPlayer {
             ("hwdec", "no"),
             // CPU での拡大（フルセグの 1440→1920）は既定の lanczos だと重い。表示時に GPU でも拡大するので軽い方式で足りる
             ("sws-scaler", "bilinear"),
+            // フルセグは 1080i。インターレースのままだと動きに櫛状の縞が出るので、インターレースの映像だけ解除する
+            ("deinterlace", "auto"),
             // 二か国語や解説の番組（デュアルモノ）は左に主音声、右に副音声が入っていて、そのままだと両方鳴る。
             // 主音声だけにする。普通のステレオには効かない
             ("ad-lavc-o", "dual_mono_mode=main"),
@@ -96,8 +98,9 @@ final class MPVPlayer {
         thread.start()
     }
 
-    /// URL（ファイルパスや fdclose://N）を再生する
-    func load(_ url: String) {
+    /// URL（ファイルパスや fdclose://N）を再生する。decoded はデコーダーを通した TS か
+    func load(_ url: String, decoded: Bool = false) {
+        trackLock.withLock { self.decoded = decoded }
         // 別の映像になるので、ノイズ除去が前の映像のフレームを参照しないよう作り直す
         renderQueue.async {
             self.enhancer = nil
@@ -302,7 +305,7 @@ final class MPVPlayer {
                 }
             case MPV_EVENT_HOOK:
                 if let hook = event.data?.assumingMemoryBound(to: mpv_event_hook.self).pointee {
-                    selectOneSeg()
+                    selectTracks()
                     mpv_hook_continue(mpv, hook.id)
                 }
             case MPV_EVENT_FILE_LOADED:
@@ -313,28 +316,46 @@ final class MPVPlayer {
         }
     }
 
-    /// フルセグを含む TS では、mpv は先頭のフルセグ（スクランブルされていて解けない）を選び、何も再生できない。
-    /// トラックを選ぶ前（on_preloaded）に、ワンセグ（H.264）の映像と同じ番組の音声を指定する
-    private func selectOneSeg() {
-        guard let mpv else { return }
-        // 前のファイルで指定したトラックを持ち越さない
-        _ = mpv_set_property_string(mpv, "vid", "auto")
-        _ = mpv_set_property_string(mpv, "aid", "auto")
-        guard let count = int64Property("track-list/count") else { return }
-        struct Track { let id: Int64, type: String, codec: String, program: Int64? }
+    /// ワンセグとフルセグの両方が見られるとき、ワンセグを選ぶか。チャンネルを替えても保つ
+    var prefersOneSeg: Bool {
+        get { trackLock.withLock { oneSeg } }
+        set {
+            trackLock.withLock { oneSeg = newValue }
+            selectTracks()
+        }
+    }
+    // イベントスレッド（on_preloaded）とメインスレッドの両方から読むので、ロックで守る
+    private let trackLock = NSLock()
+    private var oneSeg = false
+    private var decoded = false
+
+    /// 映像と音声のトラックを選ぶ。on_preloaded と、ワンセグ・フルセグの切り替えで呼ぶ。
+    /// フルセグを再生できないと、mpv は先頭のフルセグを選んで何も映らないので、ワンセグ（H.264）にする。
+    /// デコーダーを通しているか、解析で映像の大きさが分かった（再生できるファイル）ときは、prefersOneSeg に従う。
+    /// デコーダーを通していても、選局直後の解析ではフルセグの大きさが分からないことが多いので、大きさは待たない
+    private func selectTracks() {
+        guard let mpv, let count = int64Property("track-list/count") else { return }
+        struct Track { let id: Int64, type: String, codec: String, program: Int64?, width: Int64? }
         let tracks = (0..<count).compactMap { n -> Track? in
             guard let id = int64Property("track-list/\(n)/id"),
                   let type = stringProperty("track-list/\(n)/type") else { return nil }
             return Track(id: id, type: type, codec: stringProperty("track-list/\(n)/codec") ?? "",
-                         program: int64Property("track-list/\(n)/program-id"))
+                         program: int64Property("track-list/\(n)/program-id"),
+                         width: int64Property("track-list/\(n)/demux-w"))
         }
-        guard tracks.contains(where: { $0.type == "video" && $0.codec != "h264" }),
-              let video = tracks.first(where: { $0.type == "video" && $0.codec == "h264" }) else { return }
+        let (preferOneSeg, decoded) = trackLock.withLock { (oneSeg, self.decoded) }
+        let fullSeg = tracks.first { $0.type == "video" && $0.codec != "h264" && (decoded || $0.width != nil) }
+        let oneSeg = tracks.first { $0.type == "video" && $0.codec == "h264" }
+        // どちらも無ければ（再生できないフルセグだけなど）mpv に任せる
+        guard let video = preferOneSeg ? (oneSeg ?? fullSeg) : (fullSeg ?? oneSeg) else {
+            _ = mpv_set_property_string(mpv, "vid", "auto")
+            _ = mpv_set_property_string(mpv, "aid", "auto")
+            return
+        }
         _ = mpv_set_property_string(mpv, "vid", String(video.id))
-        if let audio = tracks.first(where: { $0.type == "audio" && $0.program != nil && $0.program == video.program }) {
-            _ = mpv_set_property_string(mpv, "aid", String(audio.id))
-        }
-        if debug { log("ワンセグを選ぶ: vid=\(video.id) program=\(video.program ?? -1)") }
+        let audio = tracks.first { $0.type == "audio" && $0.program != nil && $0.program == video.program }
+        _ = mpv_set_property_string(mpv, "aid", audio.map { String($0.id) } ?? "auto")
+        if debug { log("映像を選ぶ: vid=\(video.id) codec=\(video.codec) program=\(video.program ?? -1)") }
     }
 
     private func stringProperty(_ name: String) -> String? {

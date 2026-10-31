@@ -1,6 +1,6 @@
 import Foundation
 
-/// coax のサブコマンド（`coax tune --ch N --stats`、`coax scan` など）を子プロセスとして動かす。
+/// coax のサブコマンド（`coax tune --ch N --stats`、`coax scan` など）やデコーダーを子プロセスとして動かす。
 /// stdout は fd として返し（tune なら TS を mpv に渡す）、stderr は 1 行ずつ通知する。
 final class CoaxProcess {
     private let process = Process()
@@ -13,12 +13,18 @@ final class CoaxProcess {
     /// プロセス終了。メインスレッドで呼ぶ
     var onExit: ((Int32) -> Void)?
 
-    init(executable: URL, arguments: [String]) {
+    /// input を渡すと stdin にする（デコーダーに coax tune の出力をつなぐ）。fd の所有権はここに移る。
+    /// outputLines なら stdout も stderr と同じく 1 行ずつ通知する（coax pcsc は準備できたことを stdout に書く）
+    init(executable: URL, arguments: [String], input: Int32? = nil, environment: [String: String] = [:],
+         outputLines: Bool = false) {
         process.executableURL = executable
         process.arguments = arguments
-        process.standardOutput = stdoutPipe
+        process.standardOutput = outputLines ? stderrPipe : stdoutPipe
         process.standardError = stderrPipe
-        process.standardInput = FileHandle.nullDevice
+        process.standardInput = input.map { FileHandle(fileDescriptor: $0, closeOnDealloc: true) } ?? FileHandle.nullDevice
+        if !environment.isEmpty {
+            process.environment = ProcessInfo.processInfo.environment.merging(environment) { $1 }
+        }
     }
 
     var pid: Int32 { process.processIdentifier }
@@ -39,6 +45,8 @@ final class CoaxProcess {
         // 書き込み側を親で閉じておかないと、子が終わっても mpv に EOF が届かない
         try? stdoutPipe.fileHandleForWriting.close()
         try? stderrPipe.fileHandleForWriting.close()
+        // stdin に渡した fd も子に任せる。親が持っていると、子が終わっても前段に書き込みエラーが届かない
+        if let input = process.standardInput as? FileHandle, input !== FileHandle.nullDevice { try? input.close() }
         let fd = dup(stdoutPipe.fileHandleForReading.fileDescriptor)
         try? stdoutPipe.fileHandleForReading.close()
         return fd
@@ -61,7 +69,8 @@ final class CoaxProcess {
 
     private func consume(_ data: Data) {
         pending.append(data)
-        while let nl = pending.firstIndex(of: 0x0A) {
+        // デコーダーの進み具合のように \r で上書きする行もあるので、\r も行の区切りにする
+        while let nl = pending.firstIndex(where: { $0 == 0x0A || $0 == 0x0D }) {
             let line = String(decoding: pending[pending.startIndex..<nl], as: UTF8.self)
             pending.removeSubrange(pending.startIndex...nl)
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
