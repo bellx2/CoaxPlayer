@@ -54,7 +54,7 @@ CoaxPlayer /path/to/file.ts
 | --- | --- |
 | `--coax <path>` | 起動する coax のパス。省略時は実行ファイルと同じ場所の `coax`、無ければ PATH 上の `coax` |
 | `--scan <path>` | チャンネル一覧にする `coax scan` の結果。無ければここに作る。省略時は `~/Library/Application Support/coax-player/scan.json` |
-| `--decoder <path>` | 選局した TS を通す外部のデコーダー（下の「フルセグ」）。省略時はワンセグを再生する |
+| `--decoder <path>` | 選局した TS を通す外部のデコーダー（下の「フルセグ」）。省略時は `/opt/homebrew/bin/arib-b25-stream-test` があればそれを使い、無ければワンセグを再生する |
 | `--ch <n>` | 起動直後にこのチャンネルを再生する（`scan.json` にあるもの） |
 | `--record` | `--ch` で選局したものを、そのまま録画する |
 | `--debug` | mpv のログと、1 秒ごとの状態（再生位置、描画フレーム数など）を stderr に出す |
@@ -65,7 +65,7 @@ CoaxPlayer /path/to/file.ts
 ## フルセグ
 
 フルセグの再生には、利用者が別に用意するデコーダーが要る。このアプリには含まれない。
-`--decoder` で指定すると、選局した TS をそれに通してから再生する。
+`--decoder` で指定すると、選局した TS をそれに通してから再生する。指定が無くても、Homebrew で入れた `/opt/homebrew/bin/arib-b25-stream-test` があれば自動で使う。
 
 デコーダーとのつなぎ方は [docs/fullseg.md](docs/fullseg.md) にある。
 

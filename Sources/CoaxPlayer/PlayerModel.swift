@@ -4,8 +4,10 @@ import AppKit
 ///   CoaxPlayer [--coax <path>] [--scan <path>] [--decoder <path>] [--ch <n> [--record]] [--debug] [<ts file>]
 struct Config {
     var coaxPath: String?
-    /// 選局した TS を通す外部のデコーダー。stdin から TS を読んで stdout に書くもの
+    /// 選局した TS を通す外部のデコーダー。stdin から TS を読んで stdout に書くもの。
+    /// 指定が無ければ、Homebrew で入れたもの（defaultDecoderPath）があれば使う
     var decoderPath: String?
+    static let defaultDecoderPath = "/opt/homebrew/bin/arib-b25-stream-test"
     var scanPath = ScanFile.defaultPath
     var channel: String?
     /// --ch で選局したものを、そのまま録画する
@@ -28,6 +30,9 @@ struct Config {
                 // AppKit が付ける -NSxxx などは無視する
                 if !a.hasPrefix("-") { c.file = a }
             }
+        }
+        if c.decoderPath == nil, FileManager.default.isExecutableFile(atPath: defaultDecoderPath) {
+            c.decoderPath = defaultDecoderPath
         }
         return c
     }
