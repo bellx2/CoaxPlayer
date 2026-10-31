@@ -153,10 +153,9 @@ struct VideoArea: View {
                 if let playing = model.playing {
                     // 「開始-終了 番組名」
                     HStack(spacing: 12) {
-                        // チャンネルは「番号 局ロゴ 局名」。ファイルの再生ではファイル名
+                        // チャンネルは「局ロゴ 局名」。ファイルの再生ではファイル名
                         if let channel = model.current {
                             HStack(spacing: 6) {
-                                Text(channel.number)
                                 if let logo = model.logo {
                                     Image(nsImage: logo).resizable().interpolation(.high)
                                         .aspectRatio(contentMode: .fit).frame(height: 22)
