@@ -26,9 +26,13 @@ final class MPVPlayer {
     /// enhancer を作れなかった大きさ。毎フレーム作り直そうとしないよう覚えておく
     private var enhancerUnsupported: (Int, Int)?
     private var enhancedCount = 0
+    /// load してから、まだ 1 枚も描いていない
+    private var firstFramePending = false
 
     /// 再生の終了（EOF・エラー・stop）を通知する。メインスレッドで呼ぶ
     var onEndFile: ((String) -> Void)?
+    /// load してから最初のフレームを描いたことを通知する。メインスレッドで呼ぶ
+    var onFirstFrame: (() -> Void)?
 
     init(debug: Bool) {
         self.debug = debug
@@ -92,7 +96,10 @@ final class MPVPlayer {
     /// URL（ファイルパスや fdclose://N）を再生する
     func load(_ url: String) {
         // 別の映像になるので、ノイズ除去が前の映像のフレームを参照しないよう作り直す
-        renderQueue.async { self.enhancer = nil }
+        renderQueue.async {
+            self.enhancer = nil
+            self.firstFramePending = true
+        }
         command(["loadfile", url, "replace"])
     }
 
@@ -193,6 +200,10 @@ final class MPVPlayer {
             return
         }
         renderCount += 1
+        if firstFramePending {
+            firstFramePending = false
+            DispatchQueue.main.async { [weak self] in self?.onFirstFrame?() }
+        }
 
         let shown = enhanced(surface, width: Int(w), height: Int(h)) ?? surface
         guard let ioSurface = CVPixelBufferGetIOSurface(shown)?.takeUnretainedValue() else { return }

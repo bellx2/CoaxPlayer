@@ -39,13 +39,14 @@ final class PlayerModel: ObservableObject {
     @Published private(set) var playingChannel: String?
     /// `--stats` やスキャンの進捗の最新の行。止まっているときやエラーのときはその旨
     @Published private(set) var status = "停止中"
-    /// 今の番組と次の番組（`--program` の行の「開始-終了 番組名」）
+    /// 今の番組（`--program` の now の行の「開始-終了 番組名」）
     @Published private(set) var nowProgram: String?
-    @Published private(set) var nextProgram: String?
+    /// 映像の左上にチャンネルと番組名を出しているか。選局したときと番組が替わったときに、しばらく出す
+    @Published private(set) var showsInfo = false
+    /// チャンネルと番組名を出し続けるか（「情報」ボタン）。チャンネルを替えても保つ
+    @Published private(set) var pinsInfo = false
     /// 録画中のファイル
     @Published private(set) var recording: URL?
-    /// 録画を終えたあとの MP4 への変換の状況。画面下に出す
-    @Published private(set) var recordingNote: String?
     /// スキャンする範囲。ScanRange.all と同じ並び
     @Published var ranges = [true, false, false]
     @Published private(set) var scanning = false
@@ -70,6 +71,9 @@ final class PlayerModel: ObservableObject {
     private var captionRenderer: CaptionRenderer?
     /// 字幕を再生の時刻に合わせて描き直す
     private var captionTimer: Timer?
+    private var infoTimer: Timer?
+    /// 選局してから映像が出たか。情報を消すまでの時間は、映像が出てから数える
+    private var videoShown = false
 
     init(config: Config) {
         self.config = config
@@ -79,6 +83,13 @@ final class PlayerModel: ObservableObject {
             status = "チャンネル一覧がありません。範囲を選んでスキャンしてください"
         }
         if config.debug { startDebugLog() }
+        player.onFirstFrame = { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.playing != nil else { return }
+                self.videoShown = true
+                self.flashInfo()
+            }
+        }
     }
 
     /// 起動引数でファイルかチャンネルが渡されていれば再生を始める
@@ -116,8 +127,11 @@ final class PlayerModel: ObservableObject {
             // 「時刻 now|next 開始-終了 番組名」は番組の行、それ以外は受信状態の行
             let words = line.split(separator: " ", maxSplits: 2)
             switch words.count == 3 ? words[1] : "" {
-            case "now": self.nowProgram = String(words[2])
-            case "next": self.nextProgram = String(words[2])
+            case "now":
+                let program = String(words[2])
+                if program != self.nowProgram { self.flashInfo() }
+                self.nowProgram = program
+            case "next": break
             default: self.status = line
             }
             if self.config.debug { FileHandle.standardError.write(Data("stats: \(line)\n".utf8)) }
@@ -145,6 +159,8 @@ final class PlayerModel: ObservableObject {
             self.tee = tee
             current = channel
             playing = "\(channel.number) \(channel.name)"
+            videoShown = false
+            flashInfo()
             playingChannel = channel.channel
             status = "選局中..."
             // fdclose:// は mpv が読み終えたら fd を閉じる
@@ -174,9 +190,10 @@ final class PlayerModel: ObservableObject {
         playing = nil
         playingChannel = nil
         nowProgram = nil
-        nextProgram = nil
         captionTimer?.invalidate()
         captionTimer = nil
+        infoTimer?.invalidate()
+        showsInfo = false
         captionRenderer = nil
         caption = nil
         status = "停止中"
@@ -195,6 +212,26 @@ final class PlayerModel: ObservableObject {
         } catch {
             status = "録画を始められません: \(error.localizedDescription)"
         }
+    }
+
+    /// 今の番組名（「開始-終了 番組名」の番組名）
+    var nowTitle: String? {
+        nowProgram?.split(separator: " ", maxSplits: 1).last.map(String.init)
+    }
+
+    /// チャンネルと番組名を、映像が出てから 5 秒出す
+    private func flashInfo() {
+        showsInfo = true
+        infoTimer?.invalidate()
+        // 選局は時間がかかり、その間は画面が黒いので、映像が出るまでは消さない
+        guard videoShown else { return }
+        infoTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.showsInfo = false }
+        }
+    }
+
+    func toggleInfo() {
+        pinsInfo.toggle()
     }
 
     func toggleSubtitles() {
@@ -267,19 +304,15 @@ final class PlayerModel: ObservableObject {
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
-        process.terminationHandler = { [weak self] finished in
-            let ok = finished.terminationStatus == 0
-            DispatchQueue.main.async {
-                self?.recordingNote = ok
-                    ? "保存しました　\(mp4.path)（TS も残しています）"
-                    : "MP4 にできませんでした（TS は保存済み）　\(ts.path)"
-            }
+        // 画面には出さないので、失敗したときだけ stderr に残す
+        let failed = "MP4 にできませんでした（TS は保存済み）: \(ts.path)\n"
+        process.terminationHandler = { finished in
+            if finished.terminationStatus != 0 { FileHandle.standardError.write(Data(failed.utf8)) }
         }
         do {
             try process.run()
-            recordingNote = "MP4 に変換中　\(mp4.lastPathComponent)"
         } catch {
-            recordingNote = "MP4 にできませんでした（TS は保存済み）　\(ts.path)"
+            FileHandle.standardError.write(Data(failed.utf8))
         }
     }
 
@@ -288,8 +321,7 @@ final class PlayerModel: ObservableObject {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd_HHmm"
         var parts = [formatter.string(from: Date()), channel.number, channel.name]
-        // 今の番組は「開始-終了 番組名」なので、番組名だけを使う
-        if let title = nowProgram?.split(separator: " ", maxSplits: 1).last.map(String.init) {
+        if let title = nowTitle {
             parts.append(String(title.prefix(40)))
         }
         // パスに使えない文字は全角にする
@@ -381,7 +413,7 @@ final class PlayerModel: ObservableObject {
                 let pos = p.doubleProperty("time-pos").map { String(format: "%.2f", $0) } ?? "-"
                 let fps = p.doubleProperty("estimated-vf-fps").map { String(format: "%.2f", $0) } ?? "-"
                 let w = p.int64Property("dwidth") ?? 0, h = p.int64Property("dheight") ?? 0
-                let line = "debug: time-pos=\(pos) estimated-vf-fps=\(fps) size=\(w)x\(h) rendered=\(p.renderedFrames) enhanced=\(p.enhancedFrames) luma=\(p.lastLuma) layer=\(Int(p.layer.bounds.width))x\(Int(p.layer.bounds.height)) contents=\(p.layer.contents != nil) gravity=\(p.layer.contentsGravity.rawValue) windows=\(NSApp.windows.filter(\.isVisible).count) tuner-pid=\(self.tuner?.pid ?? 0) caption=\(self.caption.map { "\(Int($0.rect.width))x\(Int($0.rect.height))" } ?? "-") recording=\(self.recording?.lastPathComponent ?? "-") now=\(self.nowProgram ?? "-") next=\(self.nextProgram ?? "-")\n"
+                let line = "debug: time-pos=\(pos) estimated-vf-fps=\(fps) size=\(w)x\(h) rendered=\(p.renderedFrames) enhanced=\(p.enhancedFrames) luma=\(p.lastLuma) layer=\(Int(p.layer.bounds.width))x\(Int(p.layer.bounds.height)) contents=\(p.layer.contents != nil) gravity=\(p.layer.contentsGravity.rawValue) windows=\(NSApp.windows.filter(\.isVisible).count) tuner-pid=\(self.tuner?.pid ?? 0) caption=\(self.caption.map { "\(Int($0.rect.width))x\(Int($0.rect.height))" } ?? "-") recording=\(self.recording?.lastPathComponent ?? "-") now=\(self.nowProgram ?? "-")\n"
                 FileHandle.standardError.write(Data(line.utf8))
             }
         }

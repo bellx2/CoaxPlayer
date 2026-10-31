@@ -101,6 +101,7 @@ struct ContentView: View {
                             }
                         }
                         ListButton(label: "字幕", active: model.subtitles) { model.toggleSubtitles() }
+                        ListButton(label: "情報", active: model.pinsInfo) { model.toggleInfo() }
                     }
                 }
                 .padding(8)
@@ -119,30 +120,15 @@ struct ContentView: View {
                             .foregroundStyle(Color.placeholder)
                     }
                 }
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(model.playing ?? "")
-                    if let now = model.nowProgram {
-                        Text("今　\(now)").lineLimit(1).truncationMode(.tail)
-                    }
-                    if let next = model.nextProgram {
-                        Text("次　\(next)").lineLimit(1).truncationMode(.tail)
-                            .foregroundStyle(Color.placeholder)
-                    }
-                    if let recording = model.recording {
-                        Text("録画中　\(recording.lastPathComponent)").lineLimit(1).truncationMode(.middle)
-                            .foregroundStyle(Color.recording)
-                    } else if let note = model.recordingNote {
-                        Text(note).lineLimit(1).truncationMode(.middle)
-                            .foregroundStyle(Color.placeholder)
-                    }
-                    Text(model.status)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.panel)
+                // 受信状態などの行。チャンネルと番組名は映像の左上に出す
+                Text(model.status)
+                    .font(.system(size: 12))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.panel)
             }
         }
         .font(.system(size: 14))
@@ -170,6 +156,11 @@ struct VideoArea: View {
                     CaptionView(image: caption.image)
                         .frame(width: rect.width, height: rect.height)
                         .offset(x: rect.minX, y: rect.minY)
+                }
+                if model.showsInfo || model.pinsInfo, let playing = model.playing {
+                    OverlayView(content: ChannelInfo(channel: playing, program: model.nowTitle))
+                        .fixedSize()
+                        .offset(x: video.minX + 12, y: video.minY + 12)
                 }
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
@@ -258,6 +249,35 @@ struct VideoView: NSViewRepresentable {
     func makeNSView(context: Context) -> LayerView { LayerView(layer: layer) }
 
     func updateNSView(_ nsView: LayerView, context: Context) {}
+}
+
+/// 映像の左上に出す、チャンネル（番号と放送局名）と番組名
+struct ChannelInfo: View {
+    let channel: String
+    let program: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(channel).font(.system(size: 18, weight: .semibold))
+            if let program {
+                Text(program).font(.system(size: 14)).lineLimit(1)
+            }
+        }
+        .foregroundStyle(Color.text)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color.black.opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+}
+
+/// SwiftUI の部品を映像の上に重ねる。そのままでは映像の NSView の下に隠れるので、NSView に包む
+struct OverlayView<Content: View>: NSViewRepresentable {
+    let content: Content
+
+    func makeNSView(context: Context) -> NSHostingView<Content> { NSHostingView(rootView: content) }
+
+    func updateNSView(_ nsView: NSHostingView<Content>, context: Context) { nsView.rootView = content }
 }
 
 /// 字幕の画像を貼る。SwiftUI の Image だと映像の NSView の下に隠れるので、字幕もレイヤーに貼る

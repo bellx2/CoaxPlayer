@@ -62,7 +62,7 @@ FAKE_TS=/path/to/file.ts swift run CoaxPlayer --coax "$PWD/scripts/fake-coax.sh"
 - `Sources/CoaxPlayer/CoaxProcess.swift` — `coax tune` と `coax scan` の子プロセス。stdout を fd で返し（tune は mpv へ）、stderr を 1 行ずつ通知
 - `Sources/CoaxPlayer/Channels.swift` — `scan.json` から受信できたチャンネルを読む（リモコンの番号、簡易ロゴも）。スキャンで選べる範囲
 - `Sources/CoaxPlayer/PlayerModel.swift` — 起動引数、再生・停止、受信状態の保持
-- `Sources/CoaxPlayer/App.swift` — SwiftUI の画面と AppDelegate（終了時の後始末）。画面は coax-gpui と同じ配置と配色（左にチャンネル一覧と停止、右に映像、下に再生中のものと受信状態）
+- `Sources/CoaxPlayer/App.swift` — SwiftUI の画面と AppDelegate（終了時の後始末）。画面は coax-gpui と同じ配置と配色（左にチャンネル一覧と停止、右に映像、下に受信状態の 1 行）
 - `Sources/CoaxPlayer/StreamTee.swift` — coax の出力を mpv へ中継し、録画中はファイルにも書く。字幕の PES もここで取り出す
 - `Sources/CAribCaption` — libaribcaption の system library target
 - `Sources/CoaxPlayer/CaptionExtractor.swift` — TS から、再生中の番組の字幕の PES を取り出す
@@ -75,12 +75,14 @@ FAKE_TS=/path/to/file.ts swift run CoaxPlayer --coax "$PWD/scripts/fake-coax.sh"
 範囲を選んで「スキャン開始」を押すと `coax scan --discover=ISDBT --include '^(選んだ範囲)$' --output <--scan のパス>` を実行し、終わると一覧を読み込む。
 実行中は画面下に進捗の行を出し、「スキャン中止」で止められる（coax は進捗を残すので、次は続きから）。
 
+選局したときと番組が替わったときは、映像の左上に「リモコンの番号 放送局名」と番組名を出し、映像が出てから 5 秒で消す（選局中の黒い画面の間は消さない）。左の「情報」をオンにすると出し続ける（チャンネルを替えても保つ）。
+
 チャンネル一覧は、リモコンの番号（NIT の TS 情報記述子の `remote_control_key_id`）の順に、番号・簡易ロゴ・サービス名を並べる。番号が無い古い `scan.json` では物理チャンネル（`27ch` など）を出す。
 
 処理の流れ:
 
 1. 一覧のチャンネルを押すと `coax tune --ch N --stats --program` を起動する。stdout のパイプを `dup` して `fdclose://N` として mpv に渡す（mpv が読み終えたら閉じる）
-2. stderr の行を画面下に表示する。`now`・`next` の行（`--program`）は「今」「次」の番組として、それ以外は受信状態として最新の 1 行をそのまま出す（coax がエラーで終わったときはそのメッセージが残る）
+2. stderr の行を画面下に表示する。`now` の行（`--program`）は今の番組として映像の左上の表示に使い（`next` の行は使わない）、それ以外は受信状態として最新の 1 行をそのまま出す（coax がエラーで終わったときはそのメッセージが残る）
 3. mpv は `vo=libmpv` + ソフトウェアレンダラ（`MPV_RENDER_API_TYPE_SW`）で、映像の表示サイズのまま `bgra` で、IOSurface 付きの CVPixelBuffer に直接描く。それをそのまま CALayer の contents にし、拡大縮小は CALayer（縦横比を保つ）に任せる。高精細化できるときは、その前に下の処理をかける
 4. 「停止」・チャンネル切替・ウィンドウを閉じる・Ctrl-C/SIGTERM では、子プロセスへ SIGTERM を送り、3 秒で終わらなければ SIGKILL して終了を待つ
 
@@ -100,7 +102,7 @@ FAKE_TS=/path/to/file.ts swift run CoaxPlayer --coax "$PWD/scripts/fake-coax.sh"
 再生中は左の「録画」で録画を始め、「録画停止」・停止・チャンネル切替・終了で止まる。
 
 1. `coax tune` の出力はアプリが読んで mpv へ中継していて（`StreamTee.swift`）、録画中は同じバイト列を `~/Movies/coax/日時_リモコンの番号_局名_番組名.ts` にも書く。受信したままの TS なので、字幕や番組情報も残る
-2. 止めたら、同梱の ffmpeg で主音声だけの MP4（同じ名前の `.mp4`）を作る。映像はそのまま、音声はデュアルモノなら主音声だけにして AAC（128 kbps）にし直す。入れる映像と音声は、止めた時点で再生していたものの PID で選ぶ（フルセグも届いているときに、スクランブルのかかった方を選ばないため）。TS は残す
+2. 止めたら、同梱の ffmpeg で主音声だけの MP4（同じ名前の `.mp4`）を作る。映像はそのまま、音声はデュアルモノなら主音声だけにして AAC（128 kbps）にし直す。入れる映像と音声は、止めた時点で再生していたものの PID で選ぶ（フルセグも届いているときに、スクランブルのかかった方を選ばないため）。TS は残す。変換の進み具合と結果は画面に出さず、失敗したときだけ stderr に出す
 3. 録画中に MP4 を直接書かないのは、MP4 は最後に目次（moov）を書くので、途中で落ちると全体が読めなくなるため
 
 MP4 には ARIB の字幕は入らない。フルセグはスクランブルされたままなので、MP4 にしても見られない。
