@@ -1,102 +1,46 @@
 # coax-player
 
-[coax](https://github.com/bellx2/coax) で受信した地上デジタル放送を見るための、macOS 用のプレーヤー（SwiftUI + libmpv）。
+[coax](https://github.com/bellx2/coax) で受信した地上デジタル放送を見るための、macOS 用のプレーヤー。
 
-- チャンネルのスキャンと一覧からの選局
-- ワンセグ・フルセグの再生
-- 選局した TS を、外部のデコーダーに通してから再生する
-- ARIB 字幕の表示
+- チャンネルのスキャンと、局ロゴ・今の番組つきの一覧からの選局
+- ワンセグ・フルセグの再生、ARIB 字幕、二か国語（主・副音声）の切り替え
 - 録画（TS と、主音声だけの MP4）
-- 見ているチャンネル（局ロゴ付き）と今の番組を、映像のすぐ下に表示する
-- ワンセグの高精細化（ノイズ除去と超解像、macOS 26 以降）
-
-libmpv と依存ライブラリは `.app` に同梱するので、Homebrew などは要らない。
 
 ## 動作環境
 
 - Apple Silicon の Mac、macOS 13 以降
 - coax が対応する USB 接続の ISDB-T チューナー（動作確認は Sony CECH-ZD1 J）
-- `coax`（`.app` に同梱するか、PATH 上に置くか、`--coax` で指定する）。`--stats` と `--program` を持つ版が要る（[docs/build.md](docs/build.md#coax-の版)）
+
+## インストール
+
+```sh
+brew install --cask bellx2/tap/coax-player
+```
+
+coax と、再生に使うライブラリは `.app` に入っているので、ほかに入れるものは無い。
 
 ## 使い方
 
-`CoaxPlayer.app` を起動する。
+1. `CoaxPlayer.app` を起動し、設定画面（⌘,）の「チャンネルスキャン」でスキャンする
+2. 一覧のチャンネルを押すと再生する。Esc か delete で一覧に戻る
 
-1. 設定画面（⌘,）の「チャンネルスキャン」で範囲（地上 UHF 13〜52、ケーブル）を選び、「スキャン開始」を押す。結果は `~/Library/Application Support/coax-player/scan.json` に保存され、最初のページにチャンネル一覧（番号・局ロゴ・局名・今の番組）が 2 列で出る
-2. 一覧のチャンネルを押すと、映像のページに切り替わって再生する。「チャンネル一覧」（Esc、delete）で一覧に戻ると、再生を止める
+数字キーでも、リモコンの番号で選局できる。詳しくは [docs/usage.md](docs/usage.md)。
 
-一覧の番組は、起動時・スキャンの後・一覧に戻ったとき・「番組情報を更新」を押したときに、全チャンネルを順に短く選局して集める（1 チャンネル 1〜2 秒）。その間にチャンネルを選ぶと、集めるのをやめて再生する。
-
-一覧の左上には、チューナーのデバイスの状態（見つかったデバイスの名前、見つからなければ理由）を出す。起動時に `coax list --tuners` で確かめ、見つかったときだけ番組を集める。横の「デバイスを再スキャン」で確かめ直し、「coax を再起動」で coaxd（と外部デコーダー用の coax pcsc）を止めて立て直す。デバイスを差し直したのに見えないときに使う。
-
-再生中は、映像のすぐ下にチャンネル（局ロゴと局名）と今の番組（放送時間と番組名）を出す。局ロゴは放送で数分おきに送られてくるので、初めて見るチャンネルではしばらく出ない。一度受け取ったものは `~/Library/Application Support/coax-player/logos/` に保存し、次からはすぐ出す。
-
-数字キー（テンキーも）でも、リモコンの番号で選局できる。10 以上の番号は続けて打つ（1 桁目の後、1 秒待つ）。
-
-映像のページの右上のアイコン（カーソルを乗せると名前が出る）:
-
-| ボタン | 動作 |
-| --- | --- |
-| 録画（丸） | 再生中の番組を `~/Movies/coax/` に録画する。止めると、同じ名前の主音声だけの MP4 も作る |
-| 字幕（吹き出し） | 字幕の表示を切り替える（既定は表示） |
-| 音声（主・副・主副） | 二か国語や解説の番組（デュアルモノ）で鳴らす音声を、主音声・副音声・主と副（左右）の順に切り替える。普通のステレオの番組では変わらない |
-| ワンセグ（1） | フルセグを見られるときも、ワンセグにする |
-
-字幕・音声・ワンセグの設定は、チャンネルを替えても保つ。録画の MP4 は、音声の設定によらず主音声で作る。
-画面下の行には、選局中やエラーのメッセージを出す。受信状態の詳細（CNR、信号の強さ、ビットレート、エラー数など）は、設定画面（⌘,）の「デバッグ」で「画面下に受信状態の詳細を表示」をオンにしたときだけ出す。
-一覧を作り直すときも、設定画面からスキャンし直す。途中で中止したときは、次は続きから調べる。
-
-### 起動引数
-
-```sh
-# 起動と同時に 27ch を再生する
-CoaxPlayer --ch 27
-
-# 外部のデコーダーを指定する
-CoaxPlayer --decoder /path/to/decoder.sh
-
-# 録画した TS ファイルを再生する
-CoaxPlayer /path/to/file.ts
-```
-
-| 引数 | 意味 |
-| --- | --- |
-| `--coax <path>` | 起動する coax のパス。省略時は実行ファイルと同じ場所の `coax`、無ければ PATH 上の `coax` |
-| `--scan <path>` | チャンネル一覧にする `coax scan` の結果。無ければここに作る。省略時は `~/Library/Application Support/coax-player/scan.json` |
-| `--decoder <path>` | 選局した TS を通す外部のデコーダー（下の「外部デコーダー」）。設定画面の指定より優先する |
-| `--ch <n>` | 起動直後にこのチャンネルを再生する（`scan.json` にあるもの） |
-| `--record` | `--ch` で選局したものを、そのまま録画する |
-| `--debug` | mpv のログと、1 秒ごとの状態（再生位置、描画フレーム数など）を stderr に出す |
-| `<file>` | ファイルを再生する（`--ch` が無いとき） |
-
-`.app` の中の実行ファイルは `CoaxPlayer.app/Contents/MacOS/CoaxPlayer`。
-
-## 外部デコーダー
-
-選局した TS を、利用者が用意した外部のコマンド（デコーダー）に通してから再生・録画できる。デコーダーはこのアプリには含まれない。
-設定画面（⌘,）の「外部デコーダー」で選ぶか、起動引数 `--decoder` で指定する。どちらも無ければ、Homebrew で入れた `/opt/homebrew/bin/arib-b25-stream-test` があれば自動で使う。
-
-つなぎ方は [docs/decoder.md](docs/decoder.md) にある。
-
-## ビルド
-
-```sh
-./scripts/build-deps.sh                          # libmpv と依存ライブラリを .deps/prefix に作る（初回のみ）
-swift build                                      # 開発用
-COAX_DIR=../coax ./scripts/bundle.sh             # dist/CoaxPlayer.app を作る
-```
-
-必要なものと詳細は [docs/build.md](docs/build.md)、内部の構成は [docs/architecture.md](docs/architecture.md) にある。
+フルセグを見るには、利用者が用意した外部のデコーダーを設定画面で指定する（[docs/decoder.md](docs/decoder.md)）。デコーダーはこのアプリには含まれない。
 
 ## 既知の制限
 
-- 衛星放送（ISDB-S）のスキャンと選局には対応していない
-- チャンネルは `scan.json` にあるものからしか選べない
+- 衛星放送（ISDB-S）には対応していない
 - 字幕は MP4 に入らない（TS には残る）。ファイルの再生では字幕を出さない
-- Apple Silicon のみ。Intel Mac 向けのバイナリは作っていない
+
+## ドキュメント
+
+- [docs/usage.md](docs/usage.md) — 画面の操作、起動引数
+- [docs/decoder.md](docs/decoder.md) — 外部デコーダーのつなぎ方
+- [docs/build.md](docs/build.md) — ソースからのビルド
+- [docs/architecture.md](docs/architecture.md) — 内部の構成
 
 ## ライセンス
 
 このリポジトリのコードは MIT ライセンス（[LICENSE](LICENSE)）。
-`.app` に同梱する FFmpeg・mpv などのライブラリはそれぞれの条件（LGPL-2.1-or-later ほか）に従う。一覧は [NOTICE](NOTICE) にある。
-`bundle.sh` は、これらのライセンスの全文（`COAX_DIR` を渡したときは coax のものも）を `.app` の `Contents/Resources/licenses/` に入れる。
+`.app` に同梱する coax・FFmpeg・mpv などはそれぞれの条件に従う。一覧は [NOTICE](NOTICE)、ライセンスの全文は `.app` の `Contents/Resources/licenses/` にある。
