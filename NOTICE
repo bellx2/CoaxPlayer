@@ -1,0 +1,44 @@
+coax-swiftui
+Copyright (c) 2026 bellx2
+
+このリポジトリのコードは MIT ライセンスです（全文は LICENSE）。
+
+--------------------------------------------------------------------------------
+同梱するもの
+
+scripts/bundle.sh で作る CoaxPlayer.app には、scripts/build-deps.sh で
+ソースからビルドした次のライブラリとプログラムが入る。ライブラリはすべて
+動的にリンクしていて、Contents/Frameworks の .dylib を差し替えられる。
+各ライセンスの全文は、.app の Contents/Resources/licenses/<名前>/ と、
+それぞれの配布物（.deps/src/<名前>/ の下）にある。
+
+  名前              版         ライセンス                      ライセンスのファイル
+  ----------------  ---------  ------------------------------  ----------------------
+  FFmpeg            9.0.2      LGPL-2.1-or-later               COPYING.LGPLv2.1, LICENSE.md
+  mpv (libmpv)      0.41.0     LGPL-2.1-or-later               LICENSE.LGPL
+  libplacebo        7.387.0    LGPL-2.1-or-later               LICENSE
+  FriBidi           1.0.18     LGPL-2.1-or-later               COPYING
+  libass            0.17.5     ISC                             COPYING
+  libaribcaption    1.1.2      MIT                             LICENSE
+  FreeType          2.15.0     FreeType License (FTL)          LICENSE.TXT, docs/FTL.TXT
+  HarfBuzz          15.0.0     MIT（"Old MIT"）                COPYING
+
+  FFmpeg と mpv は GPL の部分を含めずにビルドしている（FFmpeg は --enable-gpl
+  と --enable-version3 なし、mpv は -Dgpl=false）。ffmpeg コマンドも同じ条件。
+  FreeType は FTL と GPL-2.0 のデュアルライセンスで、ここでは FTL を選ぶ。
+
+  libplacebo のビルドには、次のヘッダーだけのライブラリを使っている。
+
+  fast_float        8.3.2      Apache-2.0 OR MIT OR BSL-1.0    LICENSE-*
+  Vulkan-Headers    1.4.363.0  Apache-2.0 OR MIT               LICENSE.md, LICENSES/
+
+COAX_DIR を渡して coax と coaxd も同梱するときは、それぞれの条件に従う
+（coax は Apache-2.0、coaxd は GPL-2.0-only。詳しくは coax の NOTICE）。
+
+--------------------------------------------------------------------------------
+LGPL のライブラリについて
+
+LGPL のライブラリは改変していない（mpv だけは、Cocoa を外したときに足りなく
+なるファイルとフレームワークを足すよう、meson.build を書き換えている。
+内容は scripts/build-deps.sh にある）。ソースの取得元と SHA-256 は
+scripts/build-deps.sh にあり、同じ手順で作り直して差し替えられる。

@@ -150,3 +150,9 @@ mpv には字幕を描かせず（`sid=no`）、アプリが別のレイヤー�
 - 文字入力の欄は無く、チャンネルは `scan.json` にあるものからしか選べない（coax-gpui とそろえた）
 - スキャンできるのは地上波とケーブル（ISDB-T のチューナー）だけ。衛星（ISDB-S）の範囲はまだ無い
 - `scan.json` を作り直す画面は無い。作り直すときはファイルを消してから起動する
+
+## ライセンス
+
+このリポジトリのコードは MIT ライセンス（[LICENSE](LICENSE)）。
+`.app` に同梱する FFmpeg・mpv などのライブラリはそれぞれの条件（LGPL-2.1-or-later ほか）に従う。一覧は [NOTICE](NOTICE) にある。
+`bundle.sh` は、これらのライセンスの全文（`COAX_DIR` を渡したときは coax のものも）を `.app` の `Contents/Resources/licenses/` に入れる。

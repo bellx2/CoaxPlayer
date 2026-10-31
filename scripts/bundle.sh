@@ -23,6 +23,31 @@ if [ -n "${COAX_DIR:-}" ]; then
   cp "$COAX_DIR/coax" "$COAX_DIR/coaxd" "$APP/Contents/MacOS/"
 fi
 
+# ライセンスの全文を Contents/Resources/licenses に入れる（LGPL のライブラリを配るときの条件）
+LICENSES=$APP/Contents/Resources/licenses
+SRC=$ROOT/.deps/src
+# add_license 名前 ファイル...：licenses/名前/ にファイルを置く
+add_license() {
+  local name=$1
+  shift
+  mkdir -p "$LICENSES/$name"
+  cp "$@" "$LICENSES/$name/"
+}
+add_license coax-swiftui "$ROOT/LICENSE" "$ROOT/NOTICE"
+add_license ffmpeg "$SRC/ffmpeg/COPYING.LGPLv2.1" "$SRC/ffmpeg/LICENSE.md"
+add_license mpv "$SRC/mpv/LICENSE.LGPL"
+add_license libplacebo "$SRC/libplacebo/LICENSE"
+add_license fribidi "$SRC/fribidi/COPYING"
+add_license libass "$SRC/libass/COPYING"
+add_license libaribcaption "$SRC/libaribcaption/LICENSE"
+add_license freetype "$SRC/freetype/LICENSE.TXT" "$SRC/freetype/docs/FTL.TXT"
+add_license harfbuzz "$SRC/harfbuzz/COPYING"
+add_license fast_float "$SRC"/fast_float/LICENSE-*
+add_license vulkan-headers "$SRC/vulkan-headers/LICENSE.md" "$SRC"/vulkan-headers/LICENSES/*
+if [ -n "${COAX_DIR:-}" ]; then
+  add_license coax "$COAX_DIR/NOTICE" "$COAX_DIR/COPYING" "$COAX_DIR/LICENSE-APACHE"
+fi
+
 cat > "$APP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
