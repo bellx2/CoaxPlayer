@@ -3,7 +3,8 @@
 [coax](https://github.com/bellx2/coax) で受信した地上デジタル放送を見るための、macOS 用のプレーヤー（SwiftUI + libmpv）。
 
 - チャンネルのスキャンと一覧からの選局
-- ワンセグの再生。外部のデコーダーを指定すると、フルセグにも対応する
+- ワンセグ・フルセグの再生
+- 選局した TS を、外部のデコーダーに通してから再生する
 - ARIB 字幕の表示
 - 録画（TS と、主音声だけの MP4）
 - 見ているチャンネル（局ロゴ付き）と今の番組を、映像のすぐ下に表示する
@@ -55,7 +56,7 @@ CoaxPlayer /path/to/file.ts
 | --- | --- |
 | `--coax <path>` | 起動する coax のパス。省略時は実行ファイルと同じ場所の `coax`、無ければ PATH 上の `coax` |
 | `--scan <path>` | チャンネル一覧にする `coax scan` の結果。無ければここに作る。省略時は `~/Library/Application Support/coax-player/scan.json` |
-| `--decoder <path>` | 選局した TS を通す外部のデコーダー（下の「フルセグ」）。省略時は `/opt/homebrew/bin/arib-b25-stream-test` があればそれを使い、無ければワンセグを再生する |
+| `--decoder <path>` | 選局した TS を通す外部のデコーダー（下の「外部デコーダー」）。設定画面の指定より優先する |
 | `--ch <n>` | 起動直後にこのチャンネルを再生する（`scan.json` にあるもの） |
 | `--record` | `--ch` で選局したものを、そのまま録画する |
 | `--debug` | mpv のログと、1 秒ごとの状態（再生位置、描画フレーム数など）を stderr に出す |
@@ -63,12 +64,12 @@ CoaxPlayer /path/to/file.ts
 
 `.app` の中の実行ファイルは `CoaxPlayer.app/Contents/MacOS/CoaxPlayer`。
 
-## フルセグ
+## 外部デコーダー
 
-フルセグの再生には、利用者が別に用意するデコーダーが要る。このアプリには含まれない。
-`--decoder` で指定すると、選局した TS をそれに通してから再生する。指定が無くても、Homebrew で入れた `/opt/homebrew/bin/arib-b25-stream-test` があれば自動で使う。
+選局した TS を、利用者が用意した外部のコマンド（デコーダー）に通してから再生・録画できる。デコーダーはこのアプリには含まれない。
+設定画面（⌘,）の「外部デコーダー」で選ぶか、起動引数 `--decoder` で指定する。どちらも無ければ、Homebrew で入れた `/opt/homebrew/bin/arib-b25-stream-test` があれば自動で使う。
 
-デコーダーとのつなぎ方は [docs/fullseg.md](docs/fullseg.md) にある。
+つなぎ方は [docs/decoder.md](docs/decoder.md) にある。
 
 ## ビルド
 
@@ -82,7 +83,6 @@ COAX_DIR=../coax ./scripts/bundle.sh             # dist/CoaxPlayer.app を作る
 
 ## 既知の制限
 
-- フルセグは、デコーダーを指定しないと再生しない（ワンセグを再生する）
 - 衛星放送（ISDB-S）のスキャンと選局には対応していない
 - チャンネルは `scan.json` にあるものからしか選べない
 - 字幕は MP4 に入らない（TS には残る）。ファイルの再生では字幕を出さない

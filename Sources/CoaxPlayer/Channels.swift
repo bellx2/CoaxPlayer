@@ -5,8 +5,6 @@ struct Channel: Identifiable {
     /// `coax tune --ch` に渡す名前
     let channel: String
     let name: String
-    /// 簡易ロゴ（ワンセグ向けに、ロゴ画像の代わりに送られる局名の短い文字）。古い scan.json には無い
-    let logo: String?
     /// リモコンの番号（NIT の TS 情報記述子）。視聴者が普段使う番号はこちら
     let remoteKey: Int?
     /// 局ロゴを CDT で送っているときの、ロゴの在りか（ダウンロードデータ識別とロゴ識別）
@@ -53,9 +51,6 @@ enum ScanFile {
             let transport = analysis?["transport"] as? [String: Any]
             let services = transport?["services"] as? [[String: Any]]
             let name = services?.first?["name"] as? String ?? channel
-            let logo = services?.lazy
-                .compactMap { ($0["logo"] as? [String: Any])?["logo_char"] as? String }
-                .first { !$0.isEmpty }
             // 自分の TS の記述にあるリモコンの番号
             let tsid = transport?["transport_stream_id"] as? Int
             let networks = transport?["networks"] as? [[String: Any]] ?? []
@@ -68,7 +63,7 @@ enum ScanFile {
             let logoSource = logoInfo?["logo_transmission_type"] as? Int == 1
                 ? (downloadDataID: logoInfo?["download_data_id"] as? Int ?? 0, logoID: logoInfo?["logo_id"] as? Int ?? 0)
                 : nil
-            return Channel(channel: channel, name: name, logo: logo, remoteKey: remoteKey, logoSource: logoSource)
+            return Channel(channel: channel, name: name, remoteKey: remoteKey, logoSource: logoSource)
         }
         // リモコンの番号の順に並べる。番号の無いものは、スキャンした順のまま後ろへ
         return channels.enumerated().sorted {

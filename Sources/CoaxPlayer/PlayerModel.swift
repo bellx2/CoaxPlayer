@@ -4,10 +4,8 @@ import AppKit
 ///   CoaxPlayer [--coax <path>] [--scan <path>] [--decoder <path>] [--ch <n> [--record]] [--debug] [<ts file>]
 struct Config {
     var coaxPath: String?
-    /// 選局した TS を通す外部のデコーダー。stdin から TS を読んで stdout に書くもの。
-    /// 指定が無ければ、Homebrew で入れたもの（defaultDecoderPath）があれば使う
+    /// 選局した TS を通す外部のデコーダー。設定画面の指定より優先する
     var decoderPath: String?
-    static let defaultDecoderPath = "/opt/homebrew/bin/arib-b25-stream-test"
     var scanPath = ScanFile.defaultPath
     var channel: String?
     /// --ch で選局したものを、そのまま録画する
@@ -30,9 +28,6 @@ struct Config {
                 // AppKit が付ける -NSxxx などは無視する
                 if !a.hasPrefix("-") { c.file = a }
             }
-        }
-        if c.decoderPath == nil, FileManager.default.isExecutableFile(atPath: defaultDecoderPath) {
-            c.decoderPath = defaultDecoderPath
         }
         return c
     }
@@ -58,6 +53,24 @@ final class PlayerModel: ObservableObject {
     @Published private(set) var scanning = false
     /// スキャンの進み具合（設定画面に出す）
     @Published private(set) var scanStatus = ""
+    /// 設定画面で選んだデコーダー。空なら Homebrew で入れたものを探す
+    @Published var decoderSetting = UserDefaults.standard.string(forKey: "decoderPath") ?? "" {
+        didSet {
+            UserDefaults.standard.set(decoderSetting, forKey: "decoderPath")
+            // 次の選局から使う。カードのソケットがまだ無ければ立てる
+            if decoderPath != nil && pcsc == nil { startPCSC() }
+        }
+    }
+    static let homebrewDecoderPath = "/opt/homebrew/bin/arib-b25-stream-test"
+
+    /// 選局した TS を通す外部のデコーダー。stdin から TS を読んで stdout に書くもの。
+    /// 起動引数、設定画面、Homebrew で入れたものの順に探し、どれも無ければワンセグを再生する
+    var decoderPath: String? {
+        if let path = config.decoderPath { return path }
+        if !decoderSetting.isEmpty { return decoderSetting }
+        return FileManager.default.isExecutableFile(atPath: Self.homebrewDecoderPath) ? Self.homebrewDecoderPath : nil
+    }
+
     /// 中止したスキャンがあり、次は続きから始める
     private var scanResumable = false
     /// 字幕を表示するか。チャンネルを替えても保つ
@@ -101,7 +114,7 @@ final class PlayerModel: ObservableObject {
             status = "チャンネル一覧がありません。設定（⌘,）でスキャンしてください"
         }
         if config.debug { startDebugLog() }
-        if config.decoderPath != nil { startPCSC() }
+        if decoderPath != nil { startPCSC() }
     }
 
     /// 起動引数でファイルかチャンネルが渡されていれば再生を始める
@@ -134,7 +147,7 @@ final class PlayerModel: ObservableObject {
     func play(_ channel: Channel) {
         stop()
         // coax pcsc が動いている間は準備を待つ。終わってしまったら、デコーダーを通さずワンセグで再生する
-        if config.decoderPath != nil && pcsc != nil && !pcscReady {
+        if decoderPath != nil && pcsc != nil && !pcscReady {
             pcscWaiting = channel
             status = "デコーダーの準備中..."
             return
@@ -160,7 +173,7 @@ final class PlayerModel: ObservableObject {
         }
         do {
             var fd = try t.start()
-            if let path = config.decoderPath, pcscReady {
+            if let path = decoderPath, pcscReady {
                 let d = CoaxProcess(executable: URL(fileURLWithPath: path), arguments: [], input: fd,
                                     environment: ["PCSCLITE_CSOCK_NAME": pcscSocket.path])
                 watchDecoder(d)

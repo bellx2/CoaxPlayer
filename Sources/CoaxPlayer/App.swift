@@ -81,8 +81,7 @@ struct ContentView: View {
                             ListButton(
                                 label: channel.name,
                                 active: model.playingChannel == channel.channel,
-                                number: channel.number,
-                                badge: channel.logo
+                                number: channel.number
                             ) { model.play(channel) }
                         }
                         Spacer().frame(height: 8)
@@ -208,8 +207,6 @@ struct ListButton: View {
     var activeColor: Color = .buttonActive
     /// 先頭に出す番号（リモコンの番号）
     var number: String? = nil
-    /// 名前の前に枠付きで出す短い文字（簡易ロゴ）
-    var badge: String? = nil
     let action: () -> Void
     @State private var hovering = false
 
@@ -218,12 +215,6 @@ struct ListButton: View {
             if let number {
                 Text(number).monospacedDigit()
                     .frame(minWidth: 18, alignment: .trailing)
-            }
-            if let badge {
-                Text(badge)
-                    .font(.system(size: 10, weight: .semibold))
-                    .padding(.horizontal, 3)
-                    .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.text.opacity(0.6)))
             }
             Text(label)
                 .lineLimit(1)
@@ -307,9 +298,36 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            Section("外部デコーダー") {
+                LabeledContent("デコーダー") {
+                    Text(model.decoderPath ?? "なし")
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+                HStack {
+                    Button("選ぶ…") { chooseDecoder() }
+                    Button("自動に戻す") { model.decoderSetting = "" }
+                        .disabled(model.decoderSetting.isEmpty)
+                }
+                .disabled(model.config.decoderPath != nil)
+                Text(model.config.decoderPath != nil
+                     ? "起動引数の --decoder を使っている"
+                     : "選局した TS を通すコマンド。選ばなければ、Homebrew で入れた \(PlayerModel.homebrewDecoderPath) があれば使う。次の選局から使う")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .frame(width: 480)
+    }
+
+    private func chooseDecoder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        model.decoderSetting = url.path
     }
 }
 
