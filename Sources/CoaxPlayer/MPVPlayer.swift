@@ -26,13 +26,9 @@ final class MPVPlayer {
     /// enhancer を作れなかった大きさ。毎フレーム作り直そうとしないよう覚えておく
     private var enhancerUnsupported: (Int, Int)?
     private var enhancedCount = 0
-    /// load してから、まだ 1 枚も描いていない
-    private var firstFramePending = false
 
     /// 再生の終了（EOF・エラー・stop）を通知する。メインスレッドで呼ぶ
     var onEndFile: ((String) -> Void)?
-    /// load してから最初のフレームを描いたことを通知する。メインスレッドで呼ぶ
-    var onFirstFrame: (() -> Void)?
 
     init(debug: Bool) {
         self.debug = debug
@@ -47,6 +43,9 @@ final class MPVPlayer {
         let options: [(String, String)] = [
             ("vo", "libmpv"),
             ("hwdec", "no"),
+            // 既定の coreaudio は、音声機器が変わった通知が音声出力の片付けと重なると落ちる（mpv の hotplug_cb）。
+            // 通知を NSNotificationCenter で受ける avfoundation を使う
+            ("ao", "avfoundation"),
             // CPU での拡大（フルセグの 1440→1920）は既定の lanczos だと重い。表示時に GPU でも拡大するので軽い方式で足りる
             ("sws-scaler", "bilinear"),
             // フルセグは 1080i。インターレースのままだと動きに櫛状の縞が出るので、インターレースの映像だけ解除する
@@ -102,10 +101,7 @@ final class MPVPlayer {
     func load(_ url: String, decoded: Bool = false) {
         trackLock.withLock { self.decoded = decoded }
         // 別の映像になるので、ノイズ除去が前の映像のフレームを参照しないよう作り直す
-        renderQueue.async {
-            self.enhancer = nil
-            self.firstFramePending = true
-        }
+        renderQueue.async { self.enhancer = nil }
         command(["loadfile", url, "replace"])
     }
 
@@ -206,10 +202,6 @@ final class MPVPlayer {
             return
         }
         renderCount += 1
-        if firstFramePending {
-            firstFramePending = false
-            DispatchQueue.main.async { [weak self] in self?.onFirstFrame?() }
-        }
 
         let shown = enhanced(surface, width: Int(w), height: Int(h)) ?? surface
         guard let ioSurface = CVPixelBufferGetIOSurface(shown)?.takeUnretainedValue() else { return }

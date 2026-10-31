@@ -9,6 +9,8 @@ struct Channel: Identifiable {
     let logo: String?
     /// リモコンの番号（NIT の TS 情報記述子）。視聴者が普段使う番号はこちら
     let remoteKey: Int?
+    /// 局ロゴを CDT で送っているときの、ロゴの在りか（ダウンロードデータ識別とロゴ識別）
+    var logoSource: (downloadDataID: Int, logoID: Int)? = nil
 
     /// 画面に出す番号。リモコンの番号が無ければ物理チャンネル
     var number: String { remoteKey.map(String.init) ?? "\(channel)ch" }
@@ -16,15 +18,15 @@ struct Channel: Identifiable {
     var id: String { channel }
 }
 
-/// スキャンで選べる範囲。pattern は `coax scan --include` に渡すチャンネル名の条件（coax-gpui と同じ）
+/// スキャンで選べる範囲。pattern は `coax scan --include` に渡すチャンネル名の条件。
+/// 地デジは UHF 13〜52ch だけを使う（53〜62 は 2012 年に空いた）。VHF 1〜12ch はケーブルの再送信でだけ使う
 struct ScanRange {
     let label: String
     let pattern: String
 
     static let all = [
-        ScanRange(label: "地上 UHF 13〜62", pattern: "1[3-9]|[2-5][0-9]|6[0-2]"),
-        ScanRange(label: "地上 VHF 1〜12", pattern: "[1-9]|1[0-2]"),
-        ScanRange(label: "ケーブル C13〜C63", pattern: "C(?:1[3-9]|[2-5][0-9]|6[0-3])"),
+        ScanRange(label: "地上 UHF 13〜52", pattern: "1[3-9]|[2-4][0-9]|5[0-2]"),
+        ScanRange(label: "ケーブル VHF 1〜12・C13〜C63", pattern: "[1-9]|1[0-2]|C(?:1[3-9]|[2-5][0-9]|6[0-3])"),
     ]
 }
 
@@ -61,7 +63,12 @@ enum ScanFile {
                 .filter { $0["actual"] as? Bool == true }
                 .flatMap { $0["transports"] as? [[String: Any]] ?? [] }
                 .first { $0["transport_stream_id"] as? Int == tsid }?["remote_control_key_id"] as? Int
-            return Channel(channel: channel, name: name, logo: logo, remoteKey: remoteKey)
+            // coax は 0 の値を省くので、無ければ 0 とみなす
+            let logoInfo = services?.first?["logo"] as? [String: Any]
+            let logoSource = logoInfo?["logo_transmission_type"] as? Int == 1
+                ? (downloadDataID: logoInfo?["download_data_id"] as? Int ?? 0, logoID: logoInfo?["logo_id"] as? Int ?? 0)
+                : nil
+            return Channel(channel: channel, name: name, logo: logo, remoteKey: remoteKey, logoSource: logoSource)
         }
         // リモコンの番号の順に並べる。番号の無いものは、スキャンした順のまま後ろへ
         return channels.enumerated().sorted {

@@ -4,15 +4,16 @@
 
 - `Sources/CMpv` — libmpv の system library target（`module.modulemap`。ヘッダーとライブラリの場所は `Package.swift` で `.deps/prefix` を指定）
 - `Sources/CAribCaption` — libaribcaption の system library target
-- `Sources/CoaxPlayer/App.swift` — SwiftUI の画面と AppDelegate（終了時の後始末）。左にチャンネル一覧とボタン、右に映像、下に受信状態の 1 行
+- `Sources/CoaxPlayer/App.swift` — SwiftUI の画面と AppDelegate（終了時の後始末）。左にチャンネル一覧とボタン、右に映像とその下のチャンネルと番組の行、下に受信状態の 1 行。設定画面（スキャン）
 - `Sources/CoaxPlayer/PlayerModel.swift` — 起動引数、選局・停止、録画、スキャン、受信状態の保持
 - `Sources/CoaxPlayer/MPVPlayer.swift` — libmpv の初期化、ソフトウェアレンダラでの描画、トラックの選択、イベント処理
 - `Sources/CoaxPlayer/Enhancer.swift` — 高精細化（ノイズ除去と超解像、macOS 26 以降）
 - `Sources/CoaxPlayer/CoaxProcess.swift` — `coax tune`・`coax scan`・`coax pcsc` とデコーダーの子プロセス。stdout を fd で返し（tune はデコーダーか中継へ）、stderr を 1 行ずつ通知
 - `Sources/CoaxPlayer/StreamTee.swift` — coax の出力を mpv へ中継し、録画中はファイルにも書く。字幕の PES もここで取り出す
 - `Sources/CoaxPlayer/CaptionExtractor.swift` — TS から、再生中の番組の字幕の PES を取り出す
+- `Sources/CoaxPlayer/LogoExtractor.swift` — TS の CDT から局ロゴの PNG を取り出し、パレットを足す
 - `Sources/CoaxPlayer/CaptionRenderer.swift` — 字幕を libaribcaption で解読し、映像の表示領域の実ピクセル数で描く
-- `Sources/CoaxPlayer/Channels.swift` — `scan.json` から受信できたチャンネルを読む（リモコンの番号、簡易ロゴも）。スキャンで選べる範囲
+- `Sources/CoaxPlayer/Channels.swift` — `scan.json` から受信できたチャンネルを読む（リモコンの番号、簡易ロゴ、局ロゴの在りかも）。スキャンで選べる範囲
 - `scripts/build-deps.sh` — libmpv と依存ライブラリのビルド
 - `scripts/bundle.sh` — `.app` の組み立て
 - `scripts/fake-coax.sh` — 動作確認用の coax の代わり
@@ -21,13 +22,21 @@
 
 1. 一覧のチャンネルを押すと `coax tune --ch N --stats --program` を起動する（デコーダーを指定していれば、その stdin につなぐ）
 2. 出力は `StreamTee` が読んで、パイプ経由で `fdclose://N` として mpv に渡す（mpv が読み終えたら閉じる）。録画中はファイルにも書き、字幕の PES も取り出す
-3. coax の stderr の行を画面下に表示する。`now` の行（`--program`）は今の番組として映像の左上の表示に使い（`next` の行は使わない）、それ以外は受信状態として最新の 1 行をそのまま出す（coax がエラーで終わったときはそのメッセージが残る）
+3. coax の stderr の行を画面下に表示する。`now` の行（`--program`）は今の番組として映像の下の行に出し（`next` の行は使わない）、それ以外は受信状態として最新の 1 行をそのまま出す（coax がエラーで終わったときはそのメッセージが残る）
 4. 「停止」・チャンネル切替・ウィンドウを閉じる・Ctrl-C/SIGTERM では、子プロセスへ SIGTERM を送り、3 秒で終わらなければ SIGKILL して終了を待つ
 
 チャンネル一覧は、リモコンの番号（NIT の TS 情報記述子の `remote_control_key_id`）の順に、番号・簡易ロゴ・サービス名を並べる。番号が無い古い `scan.json` では物理チャンネル（`27ch` など）を出す。
 
-スキャンは `coax scan --discover=ISDBT --include '^(選んだ範囲)$' --output <--scan のパス>` を実行し、終わると一覧を読み込む。
-実行中は画面下に進捗の行を出し、「スキャン中止」で止められる（coax は進捗を残すので、次は続きから）。
+スキャンは設定画面から、`coax scan --discover=ISDBT --lock-timeout 3s --include '^(選んだ範囲)$' --output <--scan のパス> --restart` を実行し、終わると一覧を読み込む。
+実行中は設定画面に進捗の行を出し、「中止」で止められる。coax は進捗を残すので、中止した次のスキャンだけは `--restart` を付けずに続きから調べる。
+
+## 局ロゴ
+
+アンテナで受けた TS には、局ロゴの PNG が CDT（PID 0x29、ARIB STD-B21）で数分おきに流れる。scan.json のサービスのロゴの情報（`logo_transmission_type` が 1 のときの `download_data_id` と `logo_id`。coax は 0 を省くので、無ければ 0）で目当てのロゴを探し、HD 大（64x36、`logo_type` 5）を使う。
+
+1. 中継（`StreamTee.swift`）で TS を読み、CDT のセクションを組み立てる（`LogoExtractor.swift`）
+2. ロゴの PNG にはパレットが無く、ARIB の共通固定色（128 色。0〜64 は不透明、65〜127 は半透明）を使う決まりなので、PLTE と tRNS を足してから画像にする
+3. `~/Library/Application Support/coax-player/logos/<物理チャンネル>.png` に保存し、選局したらまずそれを出す。届いたロゴが保存したものと違えば置き換える
 
 ## mpv の設定
 

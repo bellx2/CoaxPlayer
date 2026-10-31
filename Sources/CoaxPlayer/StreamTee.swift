@@ -12,6 +12,8 @@ final class StreamTee {
     private var file: FileHandle?
     /// 字幕の PES を取り出す。中継のスレッドで読ませる
     let captions = CaptionExtractor()
+    /// 局ロゴを取り出す。start の前に設定する
+    var logos: LogoExtractor?
 
     /// 読み終えたとき（coax が終わったとき）に呼ぶ。メインスレッドで呼ぶ
     var onEnd: (() -> Void)?
@@ -58,6 +60,7 @@ final class StreamTee {
             let count = buffer.withUnsafeMutableBytes { read(source, $0.baseAddress, $0.count) }
             if count <= 0 { break }
             captions.feed(buffer[0..<count])
+            logos?.feed(buffer[0..<count])
             // mpv が閉じたあとも、録画のために読み続ける
             if mpvOpen {
                 mpvOpen = buffer.withUnsafeBytes { writeAll(sink, $0.baseAddress!, count) }

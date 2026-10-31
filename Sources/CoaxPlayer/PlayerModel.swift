@@ -49,15 +49,17 @@ final class PlayerModel: ObservableObject {
     @Published private(set) var status = "停止中"
     /// 今の番組（`--program` の now の行の「開始-終了 番組名」）
     @Published private(set) var nowProgram: String?
-    /// 映像の左上にチャンネルと番組名を出しているか。選局したときと番組が替わったときに、しばらく出す
-    @Published private(set) var showsInfo = false
-    /// チャンネルと番組名を出し続けるか（「情報」ボタン）。チャンネルを替えても保つ
-    @Published private(set) var pinsInfo = false
+    /// 見ているチャンネルの局ロゴ。まだ受け取っていなければ nil
+    @Published private(set) var logo: NSImage?
     /// 録画中のファイル
     @Published private(set) var recording: URL?
     /// スキャンする範囲。ScanRange.all と同じ並び
-    @Published var ranges = [true, false, false]
+    @Published var ranges = [true, false]
     @Published private(set) var scanning = false
+    /// スキャンの進み具合（設定画面に出す）
+    @Published private(set) var scanStatus = ""
+    /// 中止したスキャンがあり、次は続きから始める
+    private var scanResumable = false
     /// 字幕を表示するか。チャンネルを替えても保つ
     @Published private(set) var subtitles = true
     /// フルセグを再生できるときも、ワンセグを見る
@@ -83,33 +85,23 @@ final class PlayerModel: ObservableObject {
         .appendingPathComponent("coax-player").appendingPathComponent("pcscd.comm")
     /// coax の出力を mpv へ中継し、録画中はファイルにも書く
     private var tee: StreamTee?
-    /// 再生中のチャンネル。録画のファイル名に使う
-    private var current: Channel?
+    /// 再生中のチャンネル。録画のファイル名と、映像の下の行に使う
+    @Published private(set) var current: Channel?
     private var scanner: CoaxProcess?
     private var debugTimer: Timer?
     private var captionRenderer: CaptionRenderer?
     /// 字幕を再生の時刻に合わせて描き直す
     private var captionTimer: Timer?
-    private var infoTimer: Timer?
-    /// 選局してから映像が出たか。情報を消すまでの時間は、映像が出てから数える
-    private var videoShown = false
 
     init(config: Config) {
         self.config = config
         player = MPVPlayer(debug: config.debug)
         channels = (try? ScanFile.load(config.scanPath)) ?? []
         if channels.isEmpty {
-            status = "チャンネル一覧がありません。範囲を選んでスキャンしてください"
+            status = "チャンネル一覧がありません。設定（⌘,）でスキャンしてください"
         }
         if config.debug { startDebugLog() }
         if config.decoderPath != nil { startPCSC() }
-        player.onFirstFrame = { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self, self.playing != nil else { return }
-                self.videoShown = true
-                self.flashInfo()
-            }
-        }
     }
 
     /// 起動引数でファイルかチャンネルが渡されていれば再生を始める
@@ -141,7 +133,8 @@ final class PlayerModel: ObservableObject {
 
     func play(_ channel: Channel) {
         stop()
-        if config.decoderPath != nil && !pcscReady {
+        // coax pcsc が動いている間は準備を待つ。終わってしまったら、デコーダーを通さずワンセグで再生する
+        if config.decoderPath != nil && pcsc != nil && !pcscReady {
             pcscWaiting = channel
             status = "デコーダーの準備中..."
             return
@@ -154,9 +147,7 @@ final class PlayerModel: ObservableObject {
             let words = line.split(separator: " ", maxSplits: 2)
             switch words.count == 3 ? words[1] : "" {
             case "now":
-                let program = String(words[2])
-                if program != self.nowProgram { self.flashInfo() }
-                self.nowProgram = program
+                self.nowProgram = String(words[2])
             case "next": break
             default: self.status = line
             }
@@ -169,7 +160,7 @@ final class PlayerModel: ObservableObject {
         }
         do {
             var fd = try t.start()
-            if let path = config.decoderPath {
+            if let path = config.decoderPath, pcscReady {
                 let d = CoaxProcess(executable: URL(fileURLWithPath: path), arguments: [], input: fd,
                                     environment: ["PCSCLITE_CSOCK_NAME": pcscSocket.path])
                 watchDecoder(d)
@@ -192,10 +183,9 @@ final class PlayerModel: ObservableObject {
             }
             tuner = t
             self.tee = tee
+            startLogo(channel, tee)
             current = channel
             playing = "\(channel.number) \(channel.name)"
-            videoShown = false
-            flashInfo()
             playingChannel = channel.channel
             status = "選局中..."
             // fdclose:// は mpv が読み終えたら fd を閉じる
@@ -211,6 +201,12 @@ final class PlayerModel: ObservableObject {
     /// 起動時に coax pcsc を立てておき、終了まで残す
     private func startPCSC() {
         try? FileManager.default.createDirectory(at: pcscSocket.deletingLastPathComponent(), withIntermediateDirectories: true)
+        // アプリが落ちると coax pcsc は残り、ソケットとカードを持ったままになるので、前回の分を止める
+        let pkill = Process()
+        pkill.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        pkill.arguments = ["-f", "coax pcsc --socket \(pcscSocket.path)"]
+        try? pkill.run()
+        pkill.waitUntilExit()
         let p = coax(["pcsc", "--socket", pcscSocket.path], outputLines: true)
         p.onLine = { [weak self] line in
             guard let self else { return }
@@ -227,7 +223,11 @@ final class PlayerModel: ObservableObject {
             guard let self, let p, self.pcsc === p else { return }
             self.pcsc = nil
             self.pcscReady = false
-            self.status = "coax pcsc が終了しました。フルセグは再生できません"
+            self.status = "coax pcsc が終了しました。ワンセグで再生します"
+            if let channel = self.pcscWaiting {
+                self.pcscWaiting = nil
+                self.play(channel)
+            }
         }
         do {
             close(try p.start())
@@ -272,10 +272,9 @@ final class PlayerModel: ObservableObject {
         playing = nil
         playingChannel = nil
         nowProgram = nil
+        logo = nil
         captionTimer?.invalidate()
         captionTimer = nil
-        infoTimer?.invalidate()
-        showsInfo = false
         captionRenderer = nil
         caption = nil
         status = "停止中"
@@ -296,24 +295,31 @@ final class PlayerModel: ObservableObject {
         }
     }
 
+    /// 局ロゴは数分おきにしか送られないので、受け取ったものを保存しておき、選局したらまずそれを出す
+    private func startLogo(_ channel: Channel, _ tee: StreamTee) {
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/coax-player/logos/\(channel.channel).png")
+        var saved = try? Data(contentsOf: url)
+        logo = saved.flatMap(NSImage.init(data:))
+        guard let source = channel.logoSource else { return }
+        let extractor = LogoExtractor(downloadDataID: source.downloadDataID, logoID: source.logoID)
+        extractor.onLogo = { [weak self, weak tee] png in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, let tee, self.tee === tee, png != saved, let image = NSImage(data: png) else { return }
+                    saved = png
+                    self.logo = image
+                    try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try? png.write(to: url)
+                }
+            }
+        }
+        tee.logos = extractor
+    }
+
     /// 今の番組名（「開始-終了 番組名」の番組名）
     var nowTitle: String? {
         nowProgram?.split(separator: " ", maxSplits: 1).last.map(String.init)
-    }
-
-    /// チャンネルと番組名を、映像が出てから 5 秒出す
-    private func flashInfo() {
-        showsInfo = true
-        infoTimer?.invalidate()
-        // 選局は時間がかかり、その間は画面が黒いので、映像が出るまでは消さない
-        guard videoShown else { return }
-        infoTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated { self?.showsInfo = false }
-        }
-    }
-
-    func toggleInfo() {
-        pinsInfo.toggle()
     }
 
     func toggleSubtitles() {
@@ -424,7 +430,7 @@ final class PlayerModel: ObservableObject {
     func startScan() {
         let patterns = zip(ScanRange.all, ranges).filter(\.1).map(\.0.pattern)
         guard !patterns.isEmpty else {
-            status = "範囲を選んでください"
+            scanStatus = "範囲を選んでください"
             return
         }
         stop()
@@ -433,22 +439,25 @@ final class PlayerModel: ObservableObject {
             try FileManager.default.createDirectory(
                 at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
         } catch {
-            status = "\(output.deletingLastPathComponent().path): \(error.localizedDescription)"
+            scanStatus = "\(output.deletingLastPathComponent().path): \(error.localizedDescription)"
             return
         }
 
-        let s = coax([
+        var arguments = [
             // ロックは約 1 秒、チューナーを開いた直後でも 2.5 秒だった。既定の 5 秒だと、電波の無いチャンネルで待ちすぎる
             "scan", "--discover=ISDBT", "--lock-timeout", "3s",
             "--include", "^(\(patterns.joined(separator: "|")))$",
             "--output", output.path,
-        ])
+        ]
+        // 中止したものの続きでなければ、前の進捗を捨てて最初から調べ直す
+        if !scanResumable { arguments.append("--restart") }
+        let s = coax(arguments)
         var stdout: Int32 = -1
         // 進捗の行（[n/N] ...）とエラーだけを拾う。見つかったサービスの一覧の行は出さない
         s.onLine = { [weak self, weak s] line in
             guard let self, let s, self.scanner === s,
                   line.hasPrefix("[") || line.hasPrefix("coax:") else { return }
-            self.status = line
+            self.scanStatus = line
         }
         s.onExit = { [weak self, weak s] code in
             // 標準出力は使わないが、終わるまで開けておく（閉じると書き込みで落ちる）
@@ -456,19 +465,24 @@ final class PlayerModel: ObservableObject {
             guard let self, let s, self.scanner === s else { return }
             self.scanner = nil
             self.scanning = false
-            // 失敗したときは最後の行（エラー）を残す
+            // 失敗したときは、設定画面に最後の行（エラー）を残す
             if code == 0 {
+                self.scanResumable = false
                 self.channels = (try? ScanFile.load(self.config.scanPath)) ?? []
-                self.status = "スキャン完了: \(self.channels.count) チャンネル"
+                self.scanStatus = "スキャン完了: \(self.channels.count) チャンネル"
+                self.status = self.scanStatus
+            } else {
+                self.status = "スキャンに失敗しました（設定画面に理由）"
             }
         }
         do {
             stdout = try s.start()
             scanner = s
             scanning = true
-            status = "スキャンを始めます..."
+            scanStatus = "スキャンを始めます..."
+            status = "スキャン中..."
         } catch {
-            status = "coax: \(error.localizedDescription)"
+            scanStatus = "coax: \(error.localizedDescription)"
         }
     }
 
@@ -477,7 +491,9 @@ final class PlayerModel: ObservableObject {
         scanner?.stop()
         scanner = nil
         scanning = false
-        status = "スキャンを中止しました（次は続きから）"
+        scanResumable = true
+        scanStatus = "スキャンを中止しました（次は続きから）"
+        status = scanStatus
     }
 
     /// アプリ終了時の後始末

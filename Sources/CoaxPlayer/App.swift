@@ -10,6 +10,9 @@ struct CoaxPlayerApp: App {
             ContentView(model: delegate.model)
         }
         .defaultSize(width: 960, height: 600)
+        Settings {
+            SettingsView(model: delegate.model)
+        }
     }
 }
 
@@ -69,20 +72,10 @@ struct ContentView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 4) {
                     if model.channels.isEmpty {
-                        // 一覧が無いときは、範囲を選んでスキャンする
-                        Text("スキャンする範囲")
+                        // 一覧が無いときは、設定画面でスキャンしてもらう
+                        Text("チャンネル一覧がありません")
                             .foregroundStyle(Color.placeholder)
-                        ForEach(ScanRange.all.indices, id: \.self) { index in
-                            ListButton(label: ScanRange.all[index].label, active: model.ranges[index]) {
-                                if !model.scanning { model.ranges[index].toggle() }
-                            }
-                        }
-                        Spacer().frame(height: 8)
-                        if model.scanning {
-                            ListButton(label: "スキャン中止", active: false) { model.cancelScan() }
-                        } else {
-                            ListButton(label: "スキャン開始", active: false) { model.startScan() }
-                        }
+                        OpenSettingsButton(label: "設定を開いてスキャン")
                     } else {
                         ForEach(model.channels) { channel in
                             ListButton(
@@ -102,7 +95,6 @@ struct ContentView: View {
                         }
                         ListButton(label: "字幕", active: model.subtitles) { model.toggleSubtitles() }
                         ListButton(label: "ワンセグ", active: model.oneSeg) { model.toggleOneSeg() }
-                        ListButton(label: "情報", active: model.pinsInfo) { model.toggleInfo() }
                     }
                 }
                 .padding(8)
@@ -121,7 +113,7 @@ struct ContentView: View {
                             .foregroundStyle(Color.placeholder)
                     }
                 }
-                // 受信状態などの行。チャンネルと番組名は映像の左上に出す
+                // 受信状態などの行
                 Text(model.status)
                     .font(.system(size: 12))
                     .lineLimit(1)
@@ -139,7 +131,8 @@ struct ContentView: View {
     }
 }
 
-/// 映像と字幕。映像は縦横比を保って領域の中央に置き、字幕は映像の表示領域の実ピクセル数で描いたものを重ねる
+/// 映像と字幕。映像は縦横比を保って領域の上に寄せ（左右は中央）、字幕は映像の表示領域の実ピクセル数で描いたものを重ねる。
+/// 映像のすぐ下に、見ているチャンネルと今の番組を出す
 struct VideoArea: View {
     @ObservedObject var model: PlayerModel
     @Environment(\.displayScale) private var scale
@@ -158,10 +151,28 @@ struct VideoArea: View {
                         .frame(width: rect.width, height: rect.height)
                         .offset(x: rect.minX, y: rect.minY)
                 }
-                if model.showsInfo || model.pinsInfo, let playing = model.playing {
-                    OverlayView(content: ChannelInfo(channel: playing, program: model.nowTitle))
-                        .fixedSize()
-                        .offset(x: video.minX + 12, y: video.minY + 12)
+                if let playing = model.playing {
+                    // 「開始-終了 番組名」
+                    HStack(spacing: 12) {
+                        // チャンネルは「番号 局ロゴ 局名」。ファイルの再生ではファイル名
+                        if let channel = model.current {
+                            HStack(spacing: 6) {
+                                Text(channel.number)
+                                if let logo = model.logo {
+                                    Image(nsImage: logo).resizable().interpolation(.high)
+                                        .aspectRatio(contentMode: .fit).frame(height: 22)
+                                }
+                                Text(channel.name)
+                            }
+                            .font(.system(size: 16, weight: .semibold))
+                        } else {
+                            Text(playing).font(.system(size: 16, weight: .semibold))
+                        }
+                        Text(model.nowProgram ?? "").lineLimit(1).truncationMode(.tail)
+                    }
+                    .padding(.horizontal, 8)
+                    .frame(width: video.width, height: Self.infoHeight, alignment: .leading)
+                    .offset(x: video.minX, y: video.maxY)
                 }
             }
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
@@ -169,12 +180,15 @@ struct VideoArea: View {
         }
     }
 
-    /// 映像を置く位置
+    /// 映像の下のチャンネルと番組の行の高さ
+    private static let infoHeight: CGFloat = 32
+
+    /// 映像を置く位置。余白は下と左右に出す。下にはチャンネルと番組の行の分を空けておく
     private func videoRect(in size: CGSize) -> CGRect {
         let aspect = model.videoAspect
-        let width = min(size.width, size.height * aspect)
+        let width = min(size.width, max(0, size.height - Self.infoHeight) * aspect)
         let height = width / aspect
-        return CGRect(x: (size.width - width) / 2, y: (size.height - height) / 2, width: width, height: height)
+        return CGRect(x: (size.width - width) / 2, y: 0, width: width, height: height)
     }
 
     /// 字幕を置く位置。描いた枠（ピクセル）を映像の表示領域（ポイント）に合わせる
@@ -252,35 +266,6 @@ struct VideoView: NSViewRepresentable {
     func updateNSView(_ nsView: LayerView, context: Context) {}
 }
 
-/// 映像の左上に出す、チャンネル（番号と放送局名）と番組名
-struct ChannelInfo: View {
-    let channel: String
-    let program: String?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(channel).font(.system(size: 18, weight: .semibold))
-            if let program {
-                Text(program).font(.system(size: 14)).lineLimit(1)
-            }
-        }
-        .foregroundStyle(Color.text)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(Color.black.opacity(0.5))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-    }
-}
-
-/// SwiftUI の部品を映像の上に重ねる。そのままでは映像の NSView の下に隠れるので、NSView に包む
-struct OverlayView<Content: View>: NSViewRepresentable {
-    let content: Content
-
-    func makeNSView(context: Context) -> NSHostingView<Content> { NSHostingView(rootView: content) }
-
-    func updateNSView(_ nsView: NSHostingView<Content>, context: Context) { nsView.rootView = content }
-}
-
 /// 字幕の画像を貼る。SwiftUI の Image だと映像の NSView の下に隠れるので、字幕もレイヤーに貼る
 struct CaptionView: NSViewRepresentable {
     let image: CGImage
@@ -292,5 +277,51 @@ struct CaptionView: NSViewRepresentable {
         CATransaction.setDisableActions(true)
         nsView.layer?.contents = image
         CATransaction.commit()
+    }
+}
+
+/// 設定画面（⌘,）。チャンネルのスキャンを置く
+struct SettingsView: View {
+    @ObservedObject var model: PlayerModel
+
+    var body: some View {
+        Form {
+            Section("チャンネルスキャン") {
+                ForEach(ScanRange.all.indices, id: \.self) { index in
+                    Toggle(ScanRange.all[index].label, isOn: $model.ranges[index])
+                        .disabled(model.scanning)
+                }
+                HStack {
+                    if model.scanning {
+                        Button("中止") { model.cancelScan() }
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Button("スキャン開始") { model.startScan() }
+                    }
+                    Text(model.scanStatus)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .foregroundStyle(.secondary)
+                }
+                Text("今の一覧: \(model.channels.count) チャンネル。スキャン中は再生を止め、終わると一覧を作り直す")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .frame(width: 480)
+    }
+}
+
+/// 設定画面を開くボタン。macOS 14 からは SettingsLink でしか開けない
+struct OpenSettingsButton: View {
+    let label: String
+
+    var body: some View {
+        if #available(macOS 14, *) {
+            SettingsLink { Text(label).frame(maxWidth: .infinity, alignment: .leading) }
+        } else {
+            Button(label) { NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil) }
+        }
     }
 }
