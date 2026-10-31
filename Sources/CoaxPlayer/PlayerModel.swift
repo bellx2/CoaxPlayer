@@ -52,6 +52,12 @@ final class PlayerModel: ObservableObject {
     @Published private(set) var refreshing = false
     private var programTuner: CoaxProcess?
     private var programTimer: Timer?
+    /// 取得できなかった局の数と、最後のエラー（デバイスが無いときなどに一覧へ出す）
+    private var programFailures = 0
+    private var programError: String?
+    /// チューナーのデバイスの状態。一覧の左上に出す
+    @Published private(set) var device = DeviceState.checking
+    private var deviceChecker: CoaxProcess?
     /// 局ロゴ（物理チャンネルごと）。受け取って保存したものだけ
     @Published private(set) var logos: [String: NSImage] = [:]
     /// 録画中のファイル
@@ -144,8 +150,67 @@ final class PlayerModel: ObservableObject {
                 status = "\(ch) は scan.json にありません"
             }
         } else {
-            refreshPrograms()
+            checkDevices()
         }
+    }
+
+    /// `coax list --tuners` でデバイスを開いて確かめる。見つかれば番組情報を取りに行く
+    func checkDevices() {
+        guard deviceChecker == nil else { return }
+        // 番組情報の選局中だとデバイスを開けないので止める（見つかれば取り直す）
+        cancelRefresh()
+        device = .checking
+        var lastLine = ""
+        let p = coax(["list", "--tuners", "--json"])
+        p.onLine = { lastLine = $0 }
+        do {
+            let fd = try p.start()
+            deviceChecker = p
+            // JSON は stdout に出るので、終わりまで読んでから解く
+            DispatchQueue.global().async { [weak self] in
+                let data = FileHandle(fileDescriptor: fd, closeOnDealloc: true).readDataToEndOfFile()
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    self.deviceChecker = nil
+                    self.device = DeviceState(json: data, error: lastLine)
+                    if case .found = self.device { self.refreshPrograms() }
+                }
+            }
+        } catch {
+            device = .missing("coax: \(error.localizedDescription)")
+        }
+    }
+
+    /// coaxd を止めて立て直す。デバイスを差し直したのに見えないときなどに使う。
+    /// coax pcsc も coaxd につないでいるので、立て直す
+    func restartCoax() {
+        guard playing == nil, !scanning, deviceChecker == nil else { return }
+        cancelRefresh()
+        pcsc?.stop()
+        pcsc = nil
+        pcscReady = false
+        device = .checking
+        DispatchQueue.global().async { [weak self] in
+            // 次の coax が新しい coaxd を立てるので、止まりきるまで待つ（最大 3 秒）
+            Self.runTool("pkill", ["-x", "coaxd"])
+            for _ in 0..<30 where Self.runTool("pgrep", ["-x", "coaxd"]) == 0 { usleep(100_000) }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if self.decoderPath != nil { self.startPCSC() }
+                self.checkDevices()
+            }
+        }
+    }
+
+    /// /usr/bin のコマンドを動かして、終了コードを返す
+    @discardableResult
+    nonisolated private static func runTool(_ name: String, _ arguments: [String]) -> Int32 {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/\(name)")
+        p.arguments = arguments
+        guard (try? p.run()) != nil else { return -1 }
+        p.waitUntilExit()
+        return p.terminationStatus
     }
 
     /// 映像のページから一覧に戻る。再生を止め、番組情報を取り直す
@@ -188,6 +253,8 @@ final class PlayerModel: ObservableObject {
     func refreshPrograms() {
         guard playing == nil, !refreshing, !scanning, !channels.isEmpty else { return }
         refreshing = true
+        programFailures = 0
+        programError = nil
         fetchProgram(at: 0)
     }
 
@@ -195,7 +262,13 @@ final class PlayerModel: ObservableObject {
         guard refreshing else { return }
         guard index < channels.count else {
             refreshing = false
-            status = "番組情報を更新しました"
+            if programFailures == channels.count {
+                status = "番組情報を取得できませんでした" + (programError.map { ": \($0)" } ?? "")
+            } else if programFailures > 0 {
+                status = "番組情報を更新しました（\(programFailures) 局は取得できませんでした）"
+            } else {
+                status = "番組情報を更新しました"
+            }
             return
         }
         let channel = channels[index]
@@ -212,12 +285,21 @@ final class PlayerModel: ObservableObject {
             self.fetchProgram(at: index + 1)
         }
         t.onLine = { [weak self] line in
+            guard let self else { return }
             let words = line.split(separator: " ", maxSplits: 2)
-            guard let self, words.count == 3, words[1] == "now" else { return }
+            guard words.count == 3, words[1] == "now" else {
+                // 番組の行でなければエラーなどの行
+                self.programError = line
+                return
+            }
             self.programs[channel.channel] = String(words[2])
             advance()
         }
-        t.onExit = { _ in advance() }
+        t.onExit = { [weak self, weak t] code in
+            // 番組が届く前に異常終了したものを失敗として数える（時間切れで止めたものは数えない）
+            if let self, let t, self.programTuner === t, code != 0 { self.programFailures += 1 }
+            advance()
+        }
         do {
             let fd = try t.start()
             programTuner = t
@@ -231,6 +313,8 @@ final class PlayerModel: ObservableObject {
                 MainActor.assumeIsolated { advance() }
             }
         } catch {
+            programFailures += 1
+            programError = error.localizedDescription
             fetchProgram(at: index + 1)
         }
     }
@@ -335,11 +419,7 @@ final class PlayerModel: ObservableObject {
     private func startPCSC() {
         try? FileManager.default.createDirectory(at: pcscSocket.deletingLastPathComponent(), withIntermediateDirectories: true)
         // アプリが落ちると coax pcsc は残り、ソケットとカードを持ったままになるので、前回の分を止める
-        let pkill = Process()
-        pkill.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
-        pkill.arguments = ["-f", "coax pcsc --socket \(pcscSocket.path)"]
-        try? pkill.run()
-        pkill.waitUntilExit()
+        Self.runTool("pkill", ["-f", "coax pcsc --socket \(pcscSocket.path)"])
         let p = coax(["pcsc", "--socket", pcscSocket.path], outputLines: true)
         p.onLine = { [weak self] line in
             guard let self else { return }
@@ -380,7 +460,9 @@ final class PlayerModel: ObservableObject {
         d.onExit = { [weak self, weak d] code in
             guard let self, let d, self.decoder === d else { return }
             self.decoder = nil
-            if code != 0 { self.status = "デコーダーが終了しました（\(code)）: \(last)" }
+            // 止めたときは先に decoder を外すので、ここに来るのは再生中に終わったとき。
+            // カードを読めないときも終了コード 0 で終わるので、コードによらず出す
+            self.status = "デコーダーが終了しました（\(code)）: \(last)"
         }
     }
 
@@ -675,6 +757,7 @@ final class PlayerModel: ObservableObject {
         pcsc = nil
         scanner?.stop()
         scanner = nil
+        deviceChecker?.stop()
         player.destroy()
     }
 
@@ -690,6 +773,31 @@ final class PlayerModel: ObservableObject {
                 let line = "debug: time-pos=\(pos) estimated-vf-fps=\(fps) size=\(w)x\(h) rendered=\(p.renderedFrames) enhanced=\(p.enhancedFrames) luma=\(p.lastLuma) layer=\(Int(p.layer.bounds.width))x\(Int(p.layer.bounds.height)) contents=\(p.layer.contents != nil) gravity=\(p.layer.contentsGravity.rawValue) windows=\(NSApp.windows.filter(\.isVisible).count) tuner-pid=\(self.tuner?.pid ?? 0) caption=\(self.caption.map { "\(Int($0.rect.width))x\(Int($0.rect.height))" } ?? "-") recording=\(self.recording?.lastPathComponent ?? "-") now=\(self.nowProgram ?? "-")\n"
                 FileHandle.standardError.write(Data(line.utf8))
             }
+        }
+    }
+}
+
+/// チューナーのデバイスの状態
+enum DeviceState: Equatable {
+    case checking
+    /// 見つかったデバイスの名前（複数なら並べる）
+    case found(String)
+    /// 見つからない、または開けない。理由を添える
+    case missing(String)
+
+    /// `coax list --tuners --json` の出力から。開けたデバイスだけを数える
+    /// （tuners は開けなくても型番から埋まるので、probe_error が無いことで見る）
+    init(json: Data, error: String) {
+        let boards = (try? JSONSerialization.jsonObject(with: json)) as? [[String: Any]] ?? []
+        let names = boards
+            .filter { $0["probe_error"] == nil && !($0["tuners"] as? [Any] ?? []).isEmpty }
+            .compactMap { $0["description"] as? String ?? $0["name"] as? String }
+        if !names.isEmpty {
+            self = .found(names.joined(separator: "、"))
+        } else if let problem = boards.compactMap({ $0["probe_error"] as? String }).first {
+            self = .missing("デバイスを開けません: \(problem)")
+        } else {
+            self = .missing(error.isEmpty ? "デバイスが見つかりません" : "デバイスが見つかりません: \(error)")
         }
     }
 }

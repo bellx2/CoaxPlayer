@@ -27,6 +27,8 @@
 
 一覧の今の番組は、チャンネルを順に `coax tune --ch N --program --priority -1` で選局し（視聴の選局がチューナーを奪えるよう、優先度を下げる）、`now` の行が届いたら（10 秒で届かなければあきらめて）次へ進んで集める。TS は使わないが、読まずに閉じると coax が書き込みで終わるので読み捨てる。
 
+デバイスの状態は `coax list --tuners --json` で各デバイスを開いて確かめる。`tuners` は開けなくても型番から埋まるので、`probe_error` が無いものだけを見つかったとみなす。選局中は開けないので、確かめる前に番組の取得を止める。coax の再起動は、`pkill -x coaxd` で止めて終わるのを待ち（最大 3 秒）、coax pcsc を立て直してから確かめ直す（coaxd は次の coax が起動する）。
+
 チャンネル一覧は、リモコンの番号（NIT の TS 情報記述子の `remote_control_key_id`）の順に、番号とサービス名を並べる。番号が無い古い `scan.json` では物理チャンネル（`27ch` など）を出す。
 
 スキャンは設定画面から、`coax scan --discover=ISDBT --lock-timeout 3s --include '^(選んだ範囲)$' --output <--scan のパス> --restart` を実行し、終わると一覧を読み込む。

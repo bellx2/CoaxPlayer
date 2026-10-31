@@ -116,26 +116,36 @@ struct ChannelListPage: View {
     @ObservedObject var model: PlayerModel
 
     var body: some View {
-        if model.channels.isEmpty {
-            // 一覧が無いときは、設定画面でスキャンしてもらう
-            VStack(spacing: 12) {
-                Text("チャンネル一覧がありません")
-                    .foregroundStyle(Color.placeholder)
-                OpenSettingsButton(label: "設定を開いてスキャン")
-                    .fixedSize()
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            VStack(spacing: 0) {
-                HStack {
-                    Spacer()
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                DeviceStatusView(device: model.device)
+                IconButton(symbol: "arrow.clockwise", help: "デバイスを再スキャン", active: false) {
+                    model.checkDevices()
+                }
+                IconButton(symbol: "power", help: "coax を再起動", active: false) {
+                    model.restartCoax()
+                }
+                Spacer()
+                if !model.channels.isEmpty {
                     ListButton(label: model.refreshing ? "番組情報を取得中…" : "番組情報を更新", active: model.refreshing) {
                         model.refreshPrograms()
                     }
                     .fixedSize()
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 12)
+            }
+            .disabled(model.device == .checking || model.scanning)
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            if model.channels.isEmpty {
+                // 一覧が無いときは、設定画面でスキャンしてもらう
+                VStack(spacing: 12) {
+                    Text("チャンネル一覧がありません")
+                        .foregroundStyle(Color.placeholder)
+                    OpenSettingsButton(label: "設定を開いてスキャン")
+                        .fixedSize()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
                 ScrollView {
                     LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
                         ForEach(model.channels) { channel in
@@ -147,6 +157,26 @@ struct ChannelListPage: View {
                 }
             }
         }
+    }
+}
+
+/// デバイスの状態。色の点と名前（見つからなければ理由）
+struct DeviceStatusView: View {
+    let device: DeviceState
+
+    var body: some View {
+        let (color, text): (Color, String) = switch device {
+        case .checking: (.placeholder, "デバイスを確認中…")
+        case .found(let name): (.green, name)
+        case .missing(let reason): (.recording, reason)
+        }
+        HStack(spacing: 6) {
+            Circle().fill(color).frame(width: 8, height: 8)
+            Text(text)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .help(text)
     }
 }
 
