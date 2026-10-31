@@ -19,7 +19,7 @@ swift build                                      # 開発用（.deps のライ�
 COAX_DIR=../coax ./scripts/bundle.sh             # dist/CoaxPlayer.app を作る
 ```
 
-`build-deps.sh` は coax-gpui のものを元にしていて、FFmpeg 9.0.2（MPEG-TS、H.264、MPEG-2 映像、AAC と VideoToolbox のみ。録画の MP4 化のために ffmpeg コマンド、MP4 の書き出し、AAC のエンコーダーも）、libplacebo、libass ほか、mpv 0.41.0（libmpv のみ、`-Dgpl=false`）をビルドする。
+`build-deps.sh` は coax-gpui のものを元にしていて、FFmpeg 9.0.2（MPEG-TS、H.264、MPEG-2 映像、AAC と VideoToolbox のみ。録画の MP4 化のために ffmpeg コマンド、MP4 の書き出し、AAC のエンコーダーも）、libaribcaption 1.1.2（字幕の解読と描画。CoreText で描く。MIT）、libplacebo、libass ほか、mpv 0.41.0（libmpv のみ、`-Dgpl=false`）をビルドする。
 ソースは公式の配布元から取得して SHA-256 を照合する。
 mpv は Cocoa を外すと、音声出力が使う `osdep/utils-mac.c` がコンパイルされず、Foundation もリンクされない（リンクは通るが、その関数を呼んだ時点で落ちる）。そのため `meson.build` を書き換えて足し、最後に未解決の参照（`nm -m` の `dynamically looked up`）が残っていないことを確かめる。
 GPL の部品を含めないので、同梱するライブラリは LGPL などの条件で配布できる（`coaxd` は GPL-2.0-only なので、同梱するときはその条件に従う）。
@@ -63,7 +63,10 @@ FAKE_TS=/path/to/file.ts swift run CoaxPlayer --coax "$PWD/scripts/fake-coax.sh"
 - `Sources/CoaxPlayer/Channels.swift` — `scan.json` から受信できたチャンネルを読む（リモコンの番号、簡易ロゴも）。スキャンで選べる範囲
 - `Sources/CoaxPlayer/PlayerModel.swift` — 起動引数、再生・停止、受信状態の保持
 - `Sources/CoaxPlayer/App.swift` — SwiftUI の画面と AppDelegate（終了時の後始末）。画面は coax-gpui と同じ配置と配色（左にチャンネル一覧と停止、右に映像、下に再生中のものと受信状態）
-- `Sources/CoaxPlayer/StreamTee.swift` — coax の出力を mpv へ中継し、録画中はファイルにも書く
+- `Sources/CoaxPlayer/StreamTee.swift` — coax の出力を mpv へ中継し、録画中はファイルにも書く。字幕の PES もここで取り出す
+- `Sources/CAribCaption` — libaribcaption の system library target
+- `Sources/CoaxPlayer/CaptionExtractor.swift` — TS から、再生中の番組の字幕の PES を取り出す
+- `Sources/CoaxPlayer/CaptionRenderer.swift` — 字幕を libaribcaption で解読し、映像の表示領域の実ピクセル数で描く
 - `scripts/fake-coax.sh` — 動作確認用の coax の代わり（stats と番組の行も出す）
 - `scripts/build-deps.sh` — libmpv と依存ライブラリのビルド
 - `scripts/bundle.sh` — `.app` の組み立て
@@ -102,6 +105,18 @@ FAKE_TS=/path/to/file.ts swift run CoaxPlayer --coax "$PWD/scripts/fake-coax.sh"
 
 MP4 には ARIB の字幕は入らない。フルセグはスクランブルされたままなので、MP4 にしても見られない。
 
+## 字幕
+
+ARIB の字幕（ワンセグ・フルセグとも）を、映像に重ねて出す。左の「字幕」で表示を切り替える（既定は表示。チャンネルを替えても保つ）。
+mpv には字幕を描かせず（`sid=no`）、アプリが別のレイヤーに描く。mpv は映像の大きさ（ワンセグなら 320x180）でしか描けず、拡大すると粗くなるため。
+
+1. 中継（`StreamTee.swift`）で TS を読み、再生中の映像と同じ番組の字幕の PES を取り出す（`CaptionExtractor.swift`）。PMT は PAT からたどるほか、PAT を含まないワンセグの TS のため、決まった PID（0x1FC8〜0x1FCF）も読む。フルセグも届いているときは、mpv が再生している映像の PID で番組を選ぶ
+2. libaribcaption で解読し、画面上の映像の表示領域の実ピクセル数（Retina では 2 倍）で描く（`CaptionRenderer.swift`）。文字は CoreText でヒラギノなどのシステムのフォントで描く
+3. 0.1 秒ごとに mpv の `time-pos` と字幕の PTS を比べ、その時刻の字幕を出す。`rebase-start-time=no` にして、`time-pos` を放送の時刻（PTS）のままにしている
+4. ワンセグの字幕には位置の情報が無い（TR-B14）ので、FFmpeg と同じく左右の中央で下から積む。縁も背景も無く明るい場面で読めないので、行ごとに半透明の黒を敷く
+
+ファイルの再生（`<file>`）では字幕は出ない（中継を通らないため）。
+
 ## 音声
 
 二か国語や解説の番組（デュアルモノ。左に主音声、右に副音声）は、そのままだと両方が同時に鳴る。mpv に `ad-lavc-o=dual_mono_mode=main` を指定し、主音声だけを両方のスピーカーから鳴らす。普通のステレオの番組には効かない。
@@ -124,7 +139,7 @@ MP4 には ARIB の字幕は入らない。フルセグはスクランブルさ�
 ## 既知の制限
 
 - フルセグ（1440x1080 の MPEG-2、スクランブル）は復号しないので映らない。スクランブルが無くても SW 描画は解像度に比例して重くなる
-- 拡大は CALayer の補間なので、mpv のスケーラ（シェーダ）による高画質化は効かない。字幕・OSD も映像サイズで描かれる
+- 拡大は CALayer の補間なので、mpv のスケーラ（シェーダ）による高画質化は効かない。OSD も映像サイズで描かれる（字幕は別のレイヤーに描く）
 - 停止は子プロセスの終了を待つ間（最大 3 秒）メインスレッドを止める
 - アプリが SIGKILL などで強制終了した場合、子プロセスは直接は止めない。coax は stdout のパイプが閉じて書き込みに失敗した時点で終わる想定
 - `estimated-vf-fps` は SW 描画では取れない（`--debug` では描画フレーム数を代わりに出す）

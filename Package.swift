@@ -1,7 +1,7 @@
 // swift-tools-version: 6.0
 import PackageDescription
 
-// scripts/build-deps.sh で作った libmpv。Homebrew のものは使わない
+// scripts/build-deps.sh で作った libmpv と libaribcaption。Homebrew のものは使わない
 let deps = Context.packageDirectory + "/.deps/prefix"
 
 let package = Package(
@@ -12,9 +12,13 @@ let package = Package(
             name: "CMpv",
             path: "Sources/CMpv"
         ),
+        .systemLibrary(
+            name: "CAribCaption",
+            path: "Sources/CAribCaption"
+        ),
         .executableTarget(
             name: "CoaxPlayer",
-            dependencies: ["CMpv"],
+            dependencies: ["CMpv", "CAribCaption"],
             swiftSettings: [
                 .swiftLanguageMode(.v5),
                 .unsafeFlags(["-Xcc", "-I\(deps)/include"]),

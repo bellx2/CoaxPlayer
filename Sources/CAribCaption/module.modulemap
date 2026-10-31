@@ -1,0 +1,5 @@
+module CAribCaption [system] {
+    header "shim.h"
+    link "aribcaption"
+    export *
+}

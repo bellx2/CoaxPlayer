@@ -49,6 +49,14 @@ final class PlayerModel: ObservableObject {
     /// スキャンする範囲。ScanRange.all と同じ並び
     @Published var ranges = [true, false, false]
     @Published private(set) var scanning = false
+    /// 字幕を表示するか。チャンネルを替えても保つ
+    @Published private(set) var subtitles = true
+    /// 今の字幕。消えているときは nil。表示しないときも描いておき、切り替えたらすぐ出す
+    @Published private(set) var caption: CaptionImage?
+    /// 映像の縦横比（表示サイズ）
+    @Published private(set) var videoAspect: CGFloat = 16.0 / 9.0
+    /// 字幕を描く枠のピクセル数。画面の映像の表示領域に合わせて、画面側が設定する
+    var captionPixelSize = CGSize.zero
 
     let config: Config
     let player: MPVPlayer
@@ -59,6 +67,9 @@ final class PlayerModel: ObservableObject {
     private var current: Channel?
     private var scanner: CoaxProcess?
     private var debugTimer: Timer?
+    private var captionRenderer: CaptionRenderer?
+    /// 字幕を再生の時刻に合わせて描き直す
+    private var captionTimer: Timer?
 
     init(config: Config) {
         self.config = config
@@ -138,6 +149,7 @@ final class PlayerModel: ObservableObject {
             status = "選局中..."
             // fdclose:// は mpv が読み終えたら fd を閉じる
             player.load("fdclose://\(tee.mpvFD)")
+            startCaptions(tee)
             tee.start()
         } catch {
             status = "coax: \(error.localizedDescription)"
@@ -163,6 +175,10 @@ final class PlayerModel: ObservableObject {
         playingChannel = nil
         nowProgram = nil
         nextProgram = nil
+        captionTimer?.invalidate()
+        captionTimer = nil
+        captionRenderer = nil
+        caption = nil
         status = "停止中"
     }
 
@@ -178,6 +194,44 @@ final class PlayerModel: ObservableObject {
             recording = url
         } catch {
             status = "録画を始められません: \(error.localizedDescription)"
+        }
+    }
+
+    func toggleSubtitles() {
+        subtitles.toggle()
+    }
+
+    /// 中継から字幕の PES を受け取って解読し、mpv の再生位置に合わせて描く
+    private func startCaptions(_ tee: StreamTee) {
+        guard let renderer = CaptionRenderer() else { return }
+        captionRenderer = renderer
+        tee.captions.onPES = { data, pts, profile in renderer.decode(data, pts: pts, profile: profile) }
+        captionTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateCaptions() }
+        }
+    }
+
+    private func updateCaptions() {
+        guard let extractor = tee?.captions, let renderer = captionRenderer else { return }
+        // フルセグも届いているときは、mpv が再生している方の番組の字幕を選ぶ
+        let video = player.int64Property("current-tracks/video/src-id")
+        extractor.select(videoPID: video.map { UInt16(truncatingIfNeeded: $0) })
+        if let w = player.int64Property("dwidth"), let h = player.int64Property("dheight"), w > 0, h > 0,
+           CGFloat(w) / CGFloat(h) != videoAspect {
+            videoAspect = CGFloat(w) / CGFloat(h)
+        }
+
+        guard let position = player.doubleProperty("time-pos") else { return }
+        // mpv は PTS が一巡（33 ビット、約 26.5 時間）しても数え続けるので、字幕の PTS に合わせて折り返す
+        let pts = Int64(position * 1000) % ((Int64(1) << 33) / 90)
+        let id = ObjectIdentifier(renderer)
+        renderer.render(at: pts, width: Int(captionPixelSize.width), height: Int(captionPixelSize.height)) {
+            [weak self] image in
+            MainActor.assumeIsolated {
+                // 描いている間にチャンネルが替わっていたら捨てる
+                guard let self, self.captionRenderer.map(ObjectIdentifier.init) == id else { return }
+                self.caption = image
+            }
         }
     }
 
@@ -327,7 +381,7 @@ final class PlayerModel: ObservableObject {
                 let pos = p.doubleProperty("time-pos").map { String(format: "%.2f", $0) } ?? "-"
                 let fps = p.doubleProperty("estimated-vf-fps").map { String(format: "%.2f", $0) } ?? "-"
                 let w = p.int64Property("dwidth") ?? 0, h = p.int64Property("dheight") ?? 0
-                let line = "debug: time-pos=\(pos) estimated-vf-fps=\(fps) size=\(w)x\(h) rendered=\(p.renderedFrames) enhanced=\(p.enhancedFrames) luma=\(p.lastLuma) layer=\(Int(p.layer.bounds.width))x\(Int(p.layer.bounds.height)) contents=\(p.layer.contents != nil) gravity=\(p.layer.contentsGravity.rawValue) windows=\(NSApp.windows.filter(\.isVisible).count) tuner-pid=\(self.tuner?.pid ?? 0) recording=\(self.recording?.lastPathComponent ?? "-") now=\(self.nowProgram ?? "-") next=\(self.nextProgram ?? "-")\n"
+                let line = "debug: time-pos=\(pos) estimated-vf-fps=\(fps) size=\(w)x\(h) rendered=\(p.renderedFrames) enhanced=\(p.enhancedFrames) luma=\(p.lastLuma) layer=\(Int(p.layer.bounds.width))x\(Int(p.layer.bounds.height)) contents=\(p.layer.contents != nil) gravity=\(p.layer.contentsGravity.rawValue) windows=\(NSApp.windows.filter(\.isVisible).count) tuner-pid=\(self.tuner?.pid ?? 0) caption=\(self.caption.map { "\(Int($0.rect.width))x\(Int($0.rect.height))" } ?? "-") recording=\(self.recording?.lastPathComponent ?? "-") now=\(self.nowProgram ?? "-") next=\(self.nextProgram ?? "-")\n"
                 FileHandle.standardError.write(Data(line.utf8))
             }
         }

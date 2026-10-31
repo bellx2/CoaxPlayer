@@ -100,6 +100,7 @@ struct ContentView: View {
                                 model.toggleRecording()
                             }
                         }
+                        ListButton(label: "字幕", active: model.subtitles) { model.toggleSubtitles() }
                     }
                 }
                 .padding(8)
@@ -111,7 +112,7 @@ struct ContentView: View {
                 ZStack {
                     Color.black
                     // レイヤは止めても最後のフレームを持っているので、止まっているときは隠す
-                    VideoView(layer: model.player.layer)
+                    VideoArea(model: model)
                         .opacity(model.playing == nil ? 0 : 1)
                     if model.playing == nil {
                         Text("チャンネルを選んでください")
@@ -148,6 +149,48 @@ struct ContentView: View {
         .foregroundStyle(Color.text)
         .background(Color.black)
         .frame(minWidth: 480, minHeight: 300)
+    }
+}
+
+/// 映像と字幕。映像は縦横比を保って領域の中央に置き、字幕は映像の表示領域の実ピクセル数で描いたものを重ねる
+struct VideoArea: View {
+    @ObservedObject var model: PlayerModel
+    @Environment(\.displayScale) private var scale
+
+    var body: some View {
+        GeometryReader { geometry in
+            let video = videoRect(in: geometry.size)
+            let pixels = CGSize(width: (video.width * scale).rounded(), height: (video.height * scale).rounded())
+            ZStack(alignment: .topLeading) {
+                VideoView(layer: model.player.layer)
+                    .frame(width: video.width, height: video.height)
+                    .offset(x: video.minX, y: video.minY)
+                if model.subtitles, let caption = model.caption {
+                    let rect = captionRect(caption, video: video)
+                    CaptionView(image: caption.image)
+                        .frame(width: rect.width, height: rect.height)
+                        .offset(x: rect.minX, y: rect.minY)
+                }
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+            .task(id: pixels) { model.captionPixelSize = pixels }
+        }
+    }
+
+    /// 映像を置く位置
+    private func videoRect(in size: CGSize) -> CGRect {
+        let aspect = model.videoAspect
+        let width = min(size.width, size.height * aspect)
+        let height = width / aspect
+        return CGRect(x: (size.width - width) / 2, y: (size.height - height) / 2, width: width, height: height)
+    }
+
+    /// 字幕を置く位置。描いた枠（ピクセル）を映像の表示領域（ポイント）に合わせる
+    private func captionRect(_ caption: CaptionImage, video: CGRect) -> CGRect {
+        let sx = video.width / caption.frame.width
+        let sy = video.height / caption.frame.height
+        return CGRect(x: video.minX + caption.rect.minX * sx, y: video.minY + caption.rect.minY * sy,
+                      width: caption.rect.width * sx, height: caption.rect.height * sy)
     }
 }
 
@@ -215,4 +258,18 @@ struct VideoView: NSViewRepresentable {
     func makeNSView(context: Context) -> LayerView { LayerView(layer: layer) }
 
     func updateNSView(_ nsView: LayerView, context: Context) {}
+}
+
+/// 字幕の画像を貼る。SwiftUI の Image だと映像の NSView の下に隠れるので、字幕もレイヤーに貼る
+struct CaptionView: NSViewRepresentable {
+    let image: CGImage
+
+    func makeNSView(context: Context) -> LayerView { LayerView(layer: CALayer()) }
+
+    func updateNSView(_ nsView: LayerView, context: Context) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        nsView.layer?.contents = image
+        CATransaction.commit()
+    }
 }

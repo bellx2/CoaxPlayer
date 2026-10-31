@@ -2,6 +2,7 @@ import Foundation
 
 /// coax tune の出力（TS）を mpv へ中継し、録画中は同じバイト列をファイルにも書く。
 /// 受信したままの TS を残すので、番組情報や字幕などのデータも落ちない。
+/// 字幕はアプリで描くので、ここで取り出す。
 final class StreamTee {
     /// mpv に渡す読み口（fdclose:// で渡し、mpv が閉じる）
     let mpvFD: Int32
@@ -9,6 +10,8 @@ final class StreamTee {
     private let sink: Int32
     private let lock = NSLock()
     private var file: FileHandle?
+    /// 字幕の PES を取り出す。中継のスレッドで読ませる
+    let captions = CaptionExtractor()
 
     /// 読み終えたとき（coax が終わったとき）に呼ぶ。メインスレッドで呼ぶ
     var onEnd: (() -> Void)?
@@ -54,6 +57,7 @@ final class StreamTee {
         while true {
             let count = buffer.withUnsafeMutableBytes { read(source, $0.baseAddress, $0.count) }
             if count <= 0 { break }
+            captions.feed(buffer[0..<count])
             // mpv が閉じたあとも、録画のために読み続ける
             if mpvOpen {
                 mpvOpen = buffer.withUnsafeBytes { writeAll(sink, $0.baseAddress!, count) }

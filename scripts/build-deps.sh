@@ -21,10 +21,10 @@ export PATH=$DEPS/venv/bin:/usr/bin:/bin:/usr/sbin:/sbin
 
 mkdir -p "$SRC" "$PREFIX"
 
-# meson と ninja はビルドにだけ使うので、ここの venv に入れる
-if [ ! -x "$DEPS/venv/bin/meson" ]; then
-  "$UV" venv -q "$DEPS/venv"
-  "$UV" pip install -q --python "$DEPS/venv/bin/python" meson ninja jinja2
+# meson、ninja、cmake はビルドにだけ使うので、ここの venv に入れる
+if [ ! -x "$DEPS/venv/bin/meson" ] || [ ! -x "$DEPS/venv/bin/cmake" ]; then
+  [ -x "$DEPS/venv/bin/python" ] || "$UV" venv -q "$DEPS/venv"
+  "$UV" pip install -q --python "$DEPS/venv/bin/python" meson ninja jinja2 cmake
 fi
 
 # fetch 名前 URL SHA-256：取得して照合し、$SRC/名前 に展開する
@@ -65,6 +65,16 @@ meson_install harfbuzz -Dfreetype=enabled -Dglib=disabled -Dgobject=disabled -Dc
 fetch libass https://github.com/libass/libass/releases/download/0.17.5/libass-0.17.5.tar.xz \
   2dca25c0e0c837ddf00b52011b3f82cac1e4ddd3ad018227806b0c2288864acc
 meson_install libass -Dfontconfig=disabled -Dcoretext=enabled -Dlibunibreak=disabled -Dtest=disabled
+
+# ARIB の字幕の解読と描画。アプリが直接使う。macOS では CoreText で描くので FreeType などは要らない（MIT ライセンス）
+fetch libaribcaption https://github.com/xqq/libaribcaption/archive/refs/tags/v1.1.2.tar.gz \
+  649b50bde99272b97c66af2a8400163e2f84eae072d252daa26baaaf0866a1c2
+(cd "$SRC/libaribcaption" &&
+  cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+    -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_INSTALL_NAME_DIR="$PREFIX/lib" -DARIBCC_SHARED_LIBRARY=ON \
+    -DARIBCC_USE_CORETEXT=ON >/dev/null &&
+  cmake --build build >/dev/null && cmake --install build >/dev/null)
+echo "built libaribcaption"
 
 # 放送の TS に要るものだけ：MPEG-TS、H.264、MPEG-2 映像、AAC。デコードは VideoToolbox も使う。
 # h264・aac・mpegvideo のデマルチプレクサーは、PMT より先に届いたストリームの中身を判別するのに要る。

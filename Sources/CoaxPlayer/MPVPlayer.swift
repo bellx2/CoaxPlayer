@@ -48,6 +48,10 @@ final class MPVPlayer {
             // 二か国語や解説の番組（デュアルモノ）は左に主音声、右に副音声が入っていて、そのままだと両方鳴る。
             // 主音声だけにする。普通のステレオには効かない
             ("ad-lavc-o", "dual_mono_mode=main"),
+            // 字幕はアプリが別のレイヤーに描く（CaptionRenderer）。mpv は映像の大きさでしか描けず粗いため。
+            // 字幕の PTS と比べるので、time-pos は放送の時刻（PTS）のままにする
+            ("sid", "no"),
+            ("rebase-start-time", "no"),
             ("profile", "low-latency"),
             ("cache", "no"),
             ("demuxer-lavf-probesize", "200000"),
