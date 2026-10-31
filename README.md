@@ -88,6 +88,8 @@ FAKE_TS=/path/to/file.ts swift run CoaxPlayer --coax "$PWD/scripts/fake-coax.sh"
 
 低ビットレートのワンセグで表示開始を早めるため、mpv は `demuxer-lavf-probesize=200000`、`demuxer-lavf-analyzeduration=0.5`、`cache=no`、`profile=low-latency` で動かす。
 
+フルセグも届いている TS（アンテナで受けた地デジ）では、mpv は先頭のフルセグを選ぶが、スクランブルされていて何も再生できない。そこでトラックを選ぶ前（`on_preloaded` のフック）に、ワンセグ（H.264）の映像と同じ番組の音声を指定する。`profile=low-latency` はストリームの解析を省くが、そのままではトラックが一つも見つからないので、`demuxer-lavf-probe-info=yes` で解析させる。
+
 ## 描画方式
 
 ソフトウェアレンダラを選んだ。

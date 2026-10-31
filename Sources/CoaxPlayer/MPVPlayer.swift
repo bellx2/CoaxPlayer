@@ -58,6 +58,7 @@ final class MPVPlayer {
             ("rebase-start-time", "no"),
             ("profile", "low-latency"),
             ("cache", "no"),
+            ("demuxer-lavf-probe-info", "yes"),
             ("demuxer-lavf-probesize", "200000"),
             ("demuxer-lavf-analyzeduration", "0.5"),
             ("demuxer-readahead-secs", "0"),
@@ -87,6 +88,8 @@ final class MPVPlayer {
             let player = Unmanaged<MPVPlayer>.fromOpaque(ctx!).takeUnretainedValue()
             player.renderQueue.async { player.renderIfNeeded() }
         }, Unmanaged.passUnretained(self).toOpaque())
+
+        check(mpv_hook_add(mpv, 0, "on_preloaded", 0), "mpv_hook_add")
 
         let thread = Thread { [weak self] in self?.eventLoop() }
         thread.name = "mpv.events"
@@ -297,12 +300,47 @@ final class MPVPlayer {
                     // replace で次の再生に切り替わったときも STOP が来るので、そのまま通知する
                     DispatchQueue.main.async { [weak self] in self?.onEndFile?(reason) }
                 }
+            case MPV_EVENT_HOOK:
+                if let hook = event.data?.assumingMemoryBound(to: mpv_event_hook.self).pointee {
+                    selectOneSeg()
+                    mpv_hook_continue(mpv, hook.id)
+                }
             case MPV_EVENT_FILE_LOADED:
                 if debug { log("file-loaded") }
             default:
                 break
             }
         }
+    }
+
+    /// フルセグを含む TS では、mpv は先頭のフルセグ（スクランブルされていて解けない）を選び、何も再生できない。
+    /// トラックを選ぶ前（on_preloaded）に、ワンセグ（H.264）の映像と同じ番組の音声を指定する
+    private func selectOneSeg() {
+        guard let mpv else { return }
+        // 前のファイルで指定したトラックを持ち越さない
+        _ = mpv_set_property_string(mpv, "vid", "auto")
+        _ = mpv_set_property_string(mpv, "aid", "auto")
+        guard let count = int64Property("track-list/count") else { return }
+        struct Track { let id: Int64, type: String, codec: String, program: Int64? }
+        let tracks = (0..<count).compactMap { n -> Track? in
+            guard let id = int64Property("track-list/\(n)/id"),
+                  let type = stringProperty("track-list/\(n)/type") else { return nil }
+            return Track(id: id, type: type, codec: stringProperty("track-list/\(n)/codec") ?? "",
+                         program: int64Property("track-list/\(n)/program-id"))
+        }
+        guard tracks.contains(where: { $0.type == "video" && $0.codec != "h264" }),
+              let video = tracks.first(where: { $0.type == "video" && $0.codec == "h264" }) else { return }
+        _ = mpv_set_property_string(mpv, "vid", String(video.id))
+        if let audio = tracks.first(where: { $0.type == "audio" && $0.program != nil && $0.program == video.program }) {
+            _ = mpv_set_property_string(mpv, "aid", String(audio.id))
+        }
+        if debug { log("ワンセグを選ぶ: vid=\(video.id) program=\(video.program ?? -1)") }
+    }
+
+    private func stringProperty(_ name: String) -> String? {
+        guard let mpv, let s = mpv_get_property_string(mpv, name) else { return nil }
+        defer { mpv_free(s) }
+        return String(cString: s)
     }
 
     private func check(_ r: Int32, _ what: String) {
