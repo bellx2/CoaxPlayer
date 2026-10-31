@@ -258,18 +258,18 @@ struct VideoArea: View {
                     HStack(spacing: 12) {
                         // チャンネルは「局ロゴ 局名」。ファイルの再生ではファイル名
                         if let channel = model.current {
-                            HStack(spacing: 6) {
+                            HStack(spacing: 8) {
                                 if let logo = model.logos[channel.channel] {
                                     Image(nsImage: logo).resizable().interpolation(.high)
-                                        .aspectRatio(contentMode: .fit).frame(height: 22)
+                                        .aspectRatio(contentMode: .fit).frame(height: 30)
                                 }
                                 Text(channel.name)
                             }
-                            .font(.system(size: 16, weight: .semibold))
+                            .font(.system(size: 22, weight: .semibold))
                         } else {
-                            Text(playing).font(.system(size: 16, weight: .semibold))
+                            Text(playing).font(.system(size: 22, weight: .semibold))
                         }
-                        Text(model.nowProgram ?? "").lineLimit(1).truncationMode(.tail)
+                        Text(model.nowProgram ?? "").font(.system(size: 19)).lineLimit(1).truncationMode(.tail)
                     }
                     .padding(.horizontal, 8)
                     .frame(width: video.width, height: Self.infoHeight, alignment: .leading)
@@ -282,7 +282,7 @@ struct VideoArea: View {
     }
 
     /// 映像の下のチャンネルと番組の行の高さ
-    private static let infoHeight: CGFloat = 32
+    private static let infoHeight: CGFloat = 46
 
     /// 映像を置く位置。余白は下と左右に出す。下にはチャンネルと番組の行の分を空けておく
     private func videoRect(in size: CGSize) -> CGRect {
