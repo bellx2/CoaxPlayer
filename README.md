@@ -1,157 +1,91 @@
 # coax-swiftui
 
-`coax tune` で選局した TS を libmpv で再生する、macOS 用の簡単なチューナー＆再生アプリの試作（SwiftUI + libmpv）。
+[coax](https://github.com/bellx2/coax) で受信した地上デジタル放送を見るための、macOS 用のプレーヤー（SwiftUI + libmpv）。
 
-libmpv と依存ライブラリは、放送の再生に要る最小構成で自前ビルドして `.app` に同梱する。
-Homebrew などは不要で、macOS 13 以降の Apple Silicon の Mac で単独で動く。
+- チャンネルのスキャンと一覧からの選局
+- ワンセグの再生。外部のデコーダーを指定すると、フルセグにも対応する
+- ARIB 字幕の表示
+- 録画（TS と、主音声だけの MP4）
+- 選局時と番組が替わったときに、チャンネルと番組名を表示する
+- ワンセグの高精細化（ノイズ除去と超解像、macOS 26 以降）
 
-## 必要なもの（ビルドする側）
+libmpv と依存ライブラリは `.app` に同梱するので、Homebrew などは要らない。
 
-- Swift 6（Xcode のコマンドラインツール）
-- [uv](https://docs.astral.sh/uv/)（meson と ninja をビルド用の venv に入れるのに使う）と `pkg-config`
-- `coax`（`.app` に同梱するか、PATH 上に置くか、`--coax` でパスを指定）
+## 動作環境
 
-## ビルド
+- Apple Silicon の Mac、macOS 13 以降
+- coax が対応する USB 接続の ISDB-T チューナー（動作確認は Sony CECH-ZD1 J）
+- `coax`（`.app` に同梱するか、PATH 上に置くか、`--coax` で指定する）。`--stats` と `--program` を持つ版が要る（[docs/build.md](docs/build.md#coax-の版)）
+
+## 使い方
+
+`CoaxPlayer.app` を起動する。
+
+1. 初回はチャンネル一覧が無いので、左にスキャンする範囲（地上 UHF、地上 VHF、ケーブル）が並ぶ。範囲を選んで「スキャン開始」を押す。結果は `~/Library/Application Support/coax-player/scan.json` に保存され、次からはその一覧が出る
+2. 一覧のチャンネルを押すと選局して再生する
+
+左のボタン:
+
+| ボタン | 動作 |
+| --- | --- |
+| 停止 | 再生を止める |
+| 録画 / 録画停止 | 再生中の番組を `~/Movies/coax/` に録画する。止めると、同じ名前の主音声だけの MP4 も作る |
+| 字幕 | 字幕の表示を切り替える（既定は表示） |
+| ワンセグ | フルセグを見られるときも、ワンセグにする |
+| 情報 | チャンネルと番組名を出し続ける（オフのときは映像が出てから 5 秒で消える） |
+
+字幕・ワンセグ・情報の設定は、チャンネルを替えても保つ。
+一覧を作り直すときは、`scan.json` を消してから起動する。
+
+### 起動引数
 
 ```sh
-./scripts/build-deps.sh                          # libmpv と依存ライブラリを .deps/prefix に作る（初回のみ）
-swift build                                      # 開発用（.deps のライブラリを読む）
-COAX_DIR=../coax ./scripts/bundle.sh             # dist/CoaxPlayer.app を作る
-```
+# 起動と同時に 27ch を再生する
+CoaxPlayer --ch 27
 
-`build-deps.sh` は coax-gpui のものを元にしていて、FFmpeg 9.0.2（MPEG-TS、H.264、MPEG-2 映像、AAC と VideoToolbox のみ。録画の MP4 化のために ffmpeg コマンド、MP4 の書き出し、AAC のエンコーダーも）、libaribcaption 1.1.2（字幕の解読と描画。CoreText で描く。MIT）、libplacebo、libass ほか、mpv 0.41.0（libmpv のみ、`-Dgpl=false`）をビルドする。
-ソースは公式の配布元から取得して SHA-256 を照合する。
-mpv は Cocoa を外すと、音声出力が使う `osdep/utils-mac.c` がコンパイルされず、Foundation もリンクされない（リンクは通るが、その関数を呼んだ時点で落ちる）。そのため `meson.build` を書き換えて足し、最後に未解決の参照（`nm -m` の `dynamically looked up`）が残っていないことを確かめる。
-GPL の部品を含めないので、同梱するライブラリは LGPL などの条件で配布できる（`coaxd` は GPL-2.0-only なので、同梱するときはその条件に従う）。
-最低対応 OS は `MACOSX_DEPLOYMENT_TARGET`（既定 13.0）で変えられる。
+# 外部のデコーダーを指定する
+CoaxPlayer --decoder /path/to/decoder.sh
 
-`bundle.sh` は、参照しているライブラリを `.deps` からたどって `Contents/Frameworks` に集め、参照先を `@rpath` に書き換えてアドホック署名する。
-最後に、外部のライブラリへの参照が残っていないことを確かめる。
-`SIGN_IDENTITY` を渡すと、その証明書で署名する（配布には、さらに公証が要る）。
-
-## 実行
-
-```sh
-# 左の一覧（scan.json の受信できたチャンネル）から選んで再生する
-swift run CoaxPlayer --coax /Users/bell/dev/t7b/coax/coax --scan /Users/bell/dev/t7b/coax/scan.json
-
-# 起動と同時にチャンネルを選ぶ
-swift run CoaxPlayer --coax /Users/bell/dev/t7b/coax/coax --scan /Users/bell/dev/t7b/coax/scan.json --ch 27
-
-# 録画した TS ファイルを再生する（検証用）
-swift run CoaxPlayer /path/to/file.ts
-
-# チューナーを使わずに選局の経路を試す（coax の代わりに TS を流すスクリプト）
-FAKE_TS=/path/to/file.ts swift run CoaxPlayer --coax "$PWD/scripts/fake-coax.sh" --scan /path/to/scan.json --ch 27
+# 録画した TS ファイルを再生する
+CoaxPlayer /path/to/file.ts
 ```
 
 | 引数 | 意味 |
 | --- | --- |
 | `--coax <path>` | 起動する coax のパス。省略時は実行ファイルと同じ場所の `coax`、無ければ PATH 上の `coax` |
-| `--scan <path>` | チャンネル一覧にする `coax scan` の結果。無ければここに作る。省略時は `~/Library/Application Support/coax-player/scan.json`（coax-gpui と共通） |
+| `--scan <path>` | チャンネル一覧にする `coax scan` の結果。無ければここに作る。省略時は `~/Library/Application Support/coax-player/scan.json` |
+| `--decoder <path>` | 選局した TS を通す外部のデコーダー（下の「フルセグ」）。省略時はワンセグを再生する |
 | `--ch <n>` | 起動直後にこのチャンネルを再生する（`scan.json` にあるもの） |
 | `--record` | `--ch` で選局したものを、そのまま録画する |
-| `--debug` | mpv のログと、1 秒ごとの状態（time-pos、描画フレーム数、平均輝度など）を stderr に出す |
+| `--debug` | mpv のログと、1 秒ごとの状態（再生位置、描画フレーム数など）を stderr に出す |
 | `<file>` | ファイルを再生する（`--ch` が無いとき） |
 
-## 構成
+`.app` の中の実行ファイルは `CoaxPlayer.app/Contents/MacOS/CoaxPlayer`。
 
-- `Sources/CMpv` — libmpv の system library target（`module.modulemap`。ヘッダーとライブラリの場所は `Package.swift` で `.deps/prefix` を指定）
-- `Sources/CoaxPlayer/MPVPlayer.swift` — libmpv の初期化、ソフトウェアレンダラでの描画、イベント処理
-- `Sources/CoaxPlayer/Enhancer.swift` — 高精細化（ノイズ除去と超解像、macOS 26 以降）
-- `Sources/CoaxPlayer/CoaxProcess.swift` — `coax tune` と `coax scan` の子プロセス。stdout を fd で返し（tune は mpv へ）、stderr を 1 行ずつ通知
-- `Sources/CoaxPlayer/Channels.swift` — `scan.json` から受信できたチャンネルを読む（リモコンの番号、簡易ロゴも）。スキャンで選べる範囲
-- `Sources/CoaxPlayer/PlayerModel.swift` — 起動引数、再生・停止、受信状態の保持
-- `Sources/CoaxPlayer/App.swift` — SwiftUI の画面と AppDelegate（終了時の後始末）。画面は coax-gpui と同じ配置と配色（左にチャンネル一覧と停止、右に映像、下に受信状態の 1 行）
-- `Sources/CoaxPlayer/StreamTee.swift` — coax の出力を mpv へ中継し、録画中はファイルにも書く。字幕の PES もここで取り出す
-- `Sources/CAribCaption` — libaribcaption の system library target
-- `Sources/CoaxPlayer/CaptionExtractor.swift` — TS から、再生中の番組の字幕の PES を取り出す
-- `Sources/CoaxPlayer/CaptionRenderer.swift` — 字幕を libaribcaption で解読し、映像の表示領域の実ピクセル数で描く
-- `scripts/fake-coax.sh` — 動作確認用の coax の代わり（stats と番組の行も出す）
-- `scripts/build-deps.sh` — libmpv と依存ライブラリのビルド
-- `scripts/bundle.sh` — `.app` の組み立て
+## フルセグ
 
-`scan.json` が無いとき（または受信できたチャンネルが1つも無いとき）は、左にスキャンする範囲（地上 UHF 13〜62、地上 VHF 1〜12、ケーブル C13〜C63）が並ぶ。
-範囲を選んで「スキャン開始」を押すと `coax scan --discover=ISDBT --include '^(選んだ範囲)$' --output <--scan のパス>` を実行し、終わると一覧を読み込む。
-実行中は画面下に進捗の行を出し、「スキャン中止」で止められる（coax は進捗を残すので、次は続きから）。
+フルセグの再生には、利用者が別に用意するデコーダーが要る。このアプリには含まれない。
+`--decoder` で指定すると、選局した TS をそれに通してから再生する。
 
-選局したときと番組が替わったときは、映像の左上に「リモコンの番号 放送局名」と番組名を出し、映像が出てから 5 秒で消す（選局中の黒い画面の間は消さない）。左の「情報」をオンにすると出し続ける（チャンネルを替えても保つ）。
+デコーダーとのつなぎ方は [docs/fullseg.md](docs/fullseg.md) にある。
 
-チャンネル一覧は、リモコンの番号（NIT の TS 情報記述子の `remote_control_key_id`）の順に、番号・簡易ロゴ・サービス名を並べる。番号が無い古い `scan.json` では物理チャンネル（`27ch` など）を出す。
+## ビルド
 
-処理の流れ:
+```sh
+./scripts/build-deps.sh                          # libmpv と依存ライブラリを .deps/prefix に作る（初回のみ）
+swift build                                      # 開発用
+COAX_DIR=../coax ./scripts/bundle.sh             # dist/CoaxPlayer.app を作る
+```
 
-1. 一覧のチャンネルを押すと `coax tune --ch N --stats --program` を起動する。stdout のパイプを `dup` して `fdclose://N` として mpv に渡す（mpv が読み終えたら閉じる）
-2. stderr の行を画面下に表示する。`now` の行（`--program`）は今の番組として映像の左上の表示に使い（`next` の行は使わない）、それ以外は受信状態として最新の 1 行をそのまま出す（coax がエラーで終わったときはそのメッセージが残る）
-3. mpv は `vo=libmpv` + ソフトウェアレンダラ（`MPV_RENDER_API_TYPE_SW`）で、映像の表示サイズのまま `bgra` で、IOSurface 付きの CVPixelBuffer に直接描く。それをそのまま CALayer の contents にし、拡大縮小は CALayer（縦横比を保つ）に任せる。高精細化できるときは、その前に下の処理をかける
-4. 「停止」・チャンネル切替・ウィンドウを閉じる・Ctrl-C/SIGTERM では、子プロセスへ SIGTERM を送り、3 秒で終わらなければ SIGKILL して終了を待つ
-
-低ビットレートのワンセグで表示開始を早めるため、mpv は `demuxer-lavf-probesize=200000`、`demuxer-lavf-analyzeduration=0.5`、`cache=no`、`profile=low-latency` で動かす。
-
-フルセグも届いている TS（アンテナで受けた地デジ）では、mpv は先頭のフルセグを選ぶが、スクランブルされていて何も再生できない。そこでトラックを選ぶ前（`on_preloaded` のフック）に、ワンセグ（H.264）の映像と同じ番組の音声を指定する。`profile=low-latency` はストリームの解析を省くが、そのままではトラックが一つも見つからないので、`demuxer-lavf-probe-info=yes` で解析させる。
-
-## 描画方式
-
-ソフトウェアレンダラを選んだ。
-
-- 対象がワンセグ（320x180、15fps）で、CPU で描いても負荷が小さい
-- OpenGL は macOS で非推奨で、NSOpenGLView/CGL のコンテキスト管理とスレッドの扱いが増える。SW なら描画キュー 1 本と CALayer だけで済む
-- 拡大はレイヤの補間に任せるので、ウィンドウサイズを変えても再描画は要らない
-- 描く先を IOSurface にしてコピーをなくし、CPU での拡大（フルセグの 1440→1920）は `sws-scaler=bilinear` にした。フルセグ相当（MPEG-2 1440x1080i、15Mbps）で M4 Pro の 1 コアの約 26%（デコード自体は約 2%）
-
-## 録画
-
-再生中は左の「録画」で録画を始め、「録画停止」・停止・チャンネル切替・終了で止まる。
-
-1. `coax tune` の出力はアプリが読んで mpv へ中継していて（`StreamTee.swift`）、録画中は同じバイト列を `~/Movies/coax/日時_リモコンの番号_局名_番組名.ts` にも書く。受信したままの TS なので、字幕や番組情報も残る
-2. 止めたら、同梱の ffmpeg で主音声だけの MP4（同じ名前の `.mp4`）を作る。映像はそのまま、音声はデュアルモノなら主音声だけにして AAC（128 kbps）にし直す。入れる映像と音声は、止めた時点で再生していたものの PID で選ぶ（フルセグも届いているときに、スクランブルのかかった方を選ばないため）。TS は残す。変換の進み具合と結果は画面に出さず、失敗したときだけ stderr に出す
-3. 録画中に MP4 を直接書かないのは、MP4 は最後に目次（moov）を書くので、途中で落ちると全体が読めなくなるため
-
-MP4 には ARIB の字幕は入らない。フルセグはスクランブルされたままなので、MP4 にしても見られない。
-
-## 字幕
-
-ARIB の字幕（ワンセグ・フルセグとも）を、映像に重ねて出す。左の「字幕」で表示を切り替える（既定は表示。チャンネルを替えても保つ）。
-mpv には字幕を描かせず（`sid=no`）、アプリが別のレイヤーに描く。mpv は映像の大きさ（ワンセグなら 320x180）でしか描けず、拡大すると粗くなるため。
-
-1. 中継（`StreamTee.swift`）で TS を読み、再生中の映像と同じ番組の字幕の PES を取り出す（`CaptionExtractor.swift`）。PMT は PAT からたどるほか、PAT を含まないワンセグの TS のため、決まった PID（0x1FC8〜0x1FCF）も読む。フルセグも届いているときは、mpv が再生している映像の PID で番組を選ぶ
-2. libaribcaption で解読し、画面上の映像の表示領域の実ピクセル数（Retina では 2 倍）で描く（`CaptionRenderer.swift`）。文字は CoreText でヒラギノなどのシステムのフォントで描く
-3. 0.1 秒ごとに mpv の `time-pos` と字幕の PTS を比べ、その時刻の字幕を出す。`rebase-start-time=no` にして、`time-pos` を放送の時刻（PTS）のままにしている
-4. ワンセグの字幕には位置の情報が無い（TR-B14）ので、FFmpeg と同じく左右の中央で下から積む。縁も背景も無く明るい場面で読めないので、行ごとに半透明の黒を敷く
-
-ファイルの再生（`<file>`）では字幕は出ない（中継を通らないため）。
-
-## 音声
-
-二か国語や解説の番組（デュアルモノ。左に主音声、右に副音声）は、そのままだと両方が同時に鳴る。mpv に `ad-lavc-o=dual_mono_mode=main` を指定し、主音声だけを両方のスピーカーから鳴らす。普通のステレオの番組には効かない。
-
-## 高精細化（macOS 26 以降）
-
-ワンセグのような小さな映像は、使える環境なら常に VideoToolbox で次のように処理してから表示する（切り替えの設定は無い）。
-
-1. 時間方向のノイズ除去（`VTTemporalNoiseFilter`、強さ 0.5）。遅れが出ないよう、後ろのフレームは待たず直前の 1 フレームだけを参照する
-2. 低遅延の超解像（`VTLowLatencySuperResolutionScaler`）。対応する一番大きな倍率で拡大する（ワンセグは 4 倍の 1280x720）
-
-- 処理は 1 フレームあたり 3 ms 前後。ワンセグでの CPU 使用率は 1 コアの約 6% から約 11% になる（M4 Pro）
-- 超解像が対応しない大きさ（フルセグなど）や、macOS 25 以前、対応しない Mac では何もしない
-- 実装は `Sources/CoaxPlayer/Enhancer.swift`
-
-## coax の版
-
-`coax tune` の `--stats` と `--program` を使う。どちらも fork（`bellx2/coax`）のブランチにある機能で、上流の coax にはまだ無い。`bundle.sh` の `COAX_DIR` には、それを含めてビルドした coax を渡す。
+必要なものと詳細は [docs/build.md](docs/build.md)、内部の構成は [docs/architecture.md](docs/architecture.md) にある。
 
 ## 既知の制限
 
-- フルセグ（1440x1080 の MPEG-2、スクランブル）は復号しないので映らない。スクランブルが無くても SW 描画は解像度に比例して重くなる
-- 拡大は CALayer の補間なので、mpv のスケーラ（シェーダ）による高画質化は効かない。OSD も映像サイズで描かれる（字幕は別のレイヤーに描く）
-- 停止は子プロセスの終了を待つ間（最大 3 秒）メインスレッドを止める
-- アプリが SIGKILL などで強制終了した場合、子プロセスは直接は止めない。coax は stdout のパイプが閉じて書き込みに失敗した時点で終わる想定
-- `estimated-vf-fps` は SW 描画では取れない（`--debug` では描画フレーム数を代わりに出す）
-- Apple Silicon（arm64）のみ。Intel Mac 向けのユニバーサルバイナリは作っていない
-- アイコン・メニューは最小限
-- 文字入力の欄は無く、チャンネルは `scan.json` にあるものからしか選べない（coax-gpui とそろえた）
-- スキャンできるのは地上波とケーブル（ISDB-T のチューナー）だけ。衛星（ISDB-S）の範囲はまだ無い
-- `scan.json` を作り直す画面は無い。作り直すときはファイルを消してから起動する
+- フルセグは、デコーダーを指定しないと再生しない（ワンセグを再生する）
+- 衛星放送（ISDB-S）のスキャンと選局には対応していない
+- チャンネルは `scan.json` にあるものからしか選べない
+- 字幕は MP4 に入らない（TS には残る）。ファイルの再生では字幕を出さない
+- Apple Silicon のみ。Intel Mac 向けのバイナリは作っていない
 
 ## ライセンス
 
