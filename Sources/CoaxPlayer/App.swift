@@ -63,70 +63,152 @@ private extension Color {
     static let recording = Color(hex: 0xb03030)
 }
 
-/// 左にチャンネル一覧と停止、右に映像、その下に再生中のものと受信状態。coax-gpui と同じ配置
+/// 1 ページ目はチャンネル一覧、選ぶと映像のページに切り替わる。下に受信状態の行
 struct ContentView: View {
     @ObservedObject var model: PlayerModel
 
     var body: some View {
-        HStack(spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
-                    if model.channels.isEmpty {
-                        // 一覧が無いときは、設定画面でスキャンしてもらう
-                        Text("チャンネル一覧がありません")
-                            .foregroundStyle(Color.placeholder)
-                        OpenSettingsButton(label: "設定を開いてスキャン")
-                    } else {
-                        ForEach(model.channels) { channel in
-                            ListButton(
-                                label: channel.name,
-                                active: model.playingChannel == channel.channel,
-                                number: channel.number
-                            ) { model.play(channel) }
-                        }
-                        Spacer().frame(height: 8)
-                        ListButton(label: "停止", active: false) { model.stop() }
-                        if model.playingChannel != nil {
-                            ListButton(label: model.recording == nil ? "録画" : "録画停止",
-                                       active: model.recording != nil, activeColor: .recording) {
-                                model.toggleRecording()
-                            }
-                        }
-                        ListButton(label: "字幕", active: model.subtitles) { model.toggleSubtitles() }
-                        ListButton(label: "ワンセグ", active: model.oneSeg) { model.toggleOneSeg() }
-                    }
-                }
-                .padding(8)
+        VStack(spacing: 0) {
+            if model.playing == nil {
+                ChannelListPage(model: model)
+            } else {
+                PlayerPage(model: model)
             }
-            .frame(width: 200)
-            .background(Color.panel)
-
-            VStack(spacing: 0) {
-                ZStack {
-                    Color.black
-                    // レイヤは止めても最後のフレームを持っているので、止まっているときは隠す
-                    VideoArea(model: model)
-                        .opacity(model.playing == nil ? 0 : 1)
-                    if model.playing == nil {
-                        Text("チャンネルを選んでください")
-                            .foregroundStyle(Color.placeholder)
-                    }
-                }
-                // 受信状態などの行
-                Text(model.status)
-                    .font(.system(size: 12))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.panel)
-            }
+            // 受信状態などの行
+            Text(model.status)
+                .font(.system(size: 12))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.panel)
         }
         .font(.system(size: 14))
         .foregroundStyle(Color.text)
         .background(Color.black)
         .frame(minWidth: 480, minHeight: 300)
+    }
+}
+
+/// チャンネル一覧。番号、局ロゴ（受け取ったことがあれば）、局名、今の番組のカードを 2 列に並べる
+struct ChannelListPage: View {
+    @ObservedObject var model: PlayerModel
+
+    var body: some View {
+        if model.channels.isEmpty {
+            // 一覧が無いときは、設定画面でスキャンしてもらう
+            VStack(spacing: 12) {
+                Text("チャンネル一覧がありません")
+                    .foregroundStyle(Color.placeholder)
+                OpenSettingsButton(label: "設定を開いてスキャン")
+                    .fixedSize()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            VStack(spacing: 0) {
+                HStack {
+                    Spacer()
+                    ListButton(label: model.refreshing ? "番組情報を取得中…" : "番組情報を更新", active: model.refreshing) {
+                        model.refreshPrograms()
+                    }
+                    .fixedSize()
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                ScrollView {
+                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
+                        ForEach(model.channels) { channel in
+                            ChannelCard(channel: channel, logo: model.logos[channel.channel],
+                                        program: model.programs[channel.channel]) { model.play(channel) }
+                        }
+                    }
+                    .padding(16)
+                }
+            }
+        }
+    }
+}
+
+struct ChannelCard: View {
+    let channel: Channel
+    let logo: NSImage?
+    /// 今の番組（「開始-終了 番組名」）。まだ取っていなければ nil
+    let program: String?
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text(channel.number)
+                .font(.system(size: 26, weight: .semibold))
+                .monospacedDigit()
+                .frame(minWidth: 34, alignment: .trailing)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    // ロゴがまだ無い局も、局名の位置をそろえる
+                    Group {
+                        if let logo {
+                            Image(nsImage: logo).resizable().interpolation(.high).aspectRatio(contentMode: .fit)
+                        } else {
+                            Color.clear
+                        }
+                    }
+                    .frame(width: 48, height: 27)
+                    Text(channel.name)
+                        .font(.system(size: 16, weight: .semibold))
+                        .lineLimit(1)
+                }
+                // 番組がまだ無いときも高さをそろえる
+                Text(program ?? " ")
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(hovering ? Color.buttonHover : Color.button)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .onTapGesture(perform: action)
+    }
+}
+
+/// 映像のページ。上に一覧へ戻るボタンと再生中の操作、その下に映像
+struct PlayerPage: View {
+    @ObservedObject var model: PlayerModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                // 一覧に戻ると再生を止め、番組情報を取り直す（Esc でも戻る）
+                Button {
+                    model.stop()
+                    model.refreshPrograms()
+                } label: {
+                    Label("チャンネル一覧", systemImage: "chevron.left")
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.cancelAction)
+                Spacer()
+                if model.playingChannel != nil {
+                    ListButton(label: model.recording == nil ? "録画" : "録画停止",
+                               active: model.recording != nil, activeColor: .recording) {
+                        model.toggleRecording()
+                    }
+                    .fixedSize()
+                }
+                ListButton(label: "字幕", active: model.subtitles) { model.toggleSubtitles() }
+                    .fixedSize()
+                ListButton(label: "ワンセグ", active: model.oneSeg) { model.toggleOneSeg() }
+                    .fixedSize()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Color.panel)
+            VideoArea(model: model)
+        }
     }
 }
 
@@ -156,7 +238,7 @@ struct VideoArea: View {
                         // チャンネルは「局ロゴ 局名」。ファイルの再生ではファイル名
                         if let channel = model.current {
                             HStack(spacing: 6) {
-                                if let logo = model.logo {
+                                if let logo = model.logos[channel.channel] {
                                     Image(nsImage: logo).resizable().interpolation(.high)
                                         .aspectRatio(contentMode: .fit).frame(height: 22)
                                 }

@@ -4,7 +4,7 @@
 
 - `Sources/CMpv` — libmpv の system library target（`module.modulemap`。ヘッダーとライブラリの場所は `Package.swift` で `.deps/prefix` を指定）
 - `Sources/CAribCaption` — libaribcaption の system library target
-- `Sources/CoaxPlayer/App.swift` — SwiftUI の画面と AppDelegate（終了時の後始末）。左にチャンネル一覧とボタン、右に映像とその下のチャンネルと番組の行、下に受信状態の 1 行。設定画面（スキャン）
+- `Sources/CoaxPlayer/App.swift` — SwiftUI の画面と AppDelegate（終了時の後始末）。最初のページにチャンネル一覧、選ぶと映像のページ（上にボタン、映像とその下のチャンネルと番組の行）。どちらも下に受信状態の 1 行。設定画面（スキャン、外部デコーダー）
 - `Sources/CoaxPlayer/PlayerModel.swift` — 起動引数、選局・停止、録画、スキャン、受信状態の保持
 - `Sources/CoaxPlayer/MPVPlayer.swift` — libmpv の初期化、ソフトウェアレンダラでの描画、トラックの選択、イベント処理
 - `Sources/CoaxPlayer/Enhancer.swift` — 高精細化（ノイズ除去と超解像、macOS 26 以降）
@@ -24,6 +24,8 @@
 2. 出力は `StreamTee` が読んで、パイプ経由で `fdclose://N` として mpv に渡す（mpv が読み終えたら閉じる）。録画中はファイルにも書き、字幕の PES も取り出す
 3. coax の stderr の行を画面下に表示する。`now` の行（`--program`）は今の番組として映像の下の行に出し（`next` の行は使わない）、それ以外は受信状態として最新の 1 行をそのまま出す（coax がエラーで終わったときはそのメッセージが残る）
 4. 「停止」・チャンネル切替・ウィンドウを閉じる・Ctrl-C/SIGTERM では、子プロセスへ SIGTERM を送り、3 秒で終わらなければ SIGKILL して終了を待つ
+
+一覧の今の番組は、チャンネルを順に `coax tune --ch N --program` で選局し、`now` の行が届いたら（10 秒で届かなければあきらめて）次へ進んで集める。TS は使わないが、読まずに閉じると coax が書き込みで終わるので読み捨てる。
 
 チャンネル一覧は、リモコンの番号（NIT の TS 情報記述子の `remote_control_key_id`）の順に、番号とサービス名を並べる。番号が無い古い `scan.json` では物理チャンネル（`27ch` など）を出す。
 

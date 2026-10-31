@@ -35,7 +35,9 @@ struct Config {
 
 @MainActor
 final class PlayerModel: ObservableObject {
-    @Published private(set) var channels: [Channel] = []
+    @Published private(set) var channels: [Channel] = [] {
+        didSet { loadLogos() }
+    }
     /// 再生中のチャンネル（"1 ＮＨＫ総合１・東京"）かファイル名
     @Published private(set) var playing: String?
     /// 再生中のチャンネル名。一覧で強調する
@@ -44,8 +46,14 @@ final class PlayerModel: ObservableObject {
     @Published private(set) var status = "停止中"
     /// 今の番組（`--program` の now の行の「開始-終了 番組名」）
     @Published private(set) var nowProgram: String?
-    /// 見ているチャンネルの局ロゴ。まだ受け取っていなければ nil
-    @Published private(set) var logo: NSImage?
+    /// 各チャンネルの今の番組（物理チャンネルごとの「開始-終了 番組名」）。一覧に出す
+    @Published private(set) var programs: [String: String] = [:]
+    /// 一覧のチャンネルを順に選局して、今の番組を集めている
+    @Published private(set) var refreshing = false
+    private var programTuner: CoaxProcess?
+    private var programTimer: Timer?
+    /// 局ロゴ（物理チャンネルごと）。受け取って保存したものだけ
+    @Published private(set) var logos: [String: NSImage] = [:]
     /// 録画中のファイル
     @Published private(set) var recording: URL?
     /// スキャンする範囲。ScanRange.all と同じ並び
@@ -110,6 +118,8 @@ final class PlayerModel: ObservableObject {
         self.config = config
         player = MPVPlayer(debug: config.debug)
         channels = (try? ScanFile.load(config.scanPath)) ?? []
+        // init の中では didSet が呼ばれないので、ここで読む
+        loadLogos()
         if channels.isEmpty {
             status = "チャンネル一覧がありません。設定（⌘,）でスキャンしてください"
         }
@@ -128,7 +138,66 @@ final class PlayerModel: ObservableObject {
             } else {
                 status = "\(ch) は scan.json にありません"
             }
+        } else {
+            refreshPrograms()
         }
+    }
+
+    /// 一覧のチャンネルを順に短く選局し、今の番組を集める。再生中とスキャン中は何もしない
+    func refreshPrograms() {
+        guard playing == nil, !refreshing, !scanning, !channels.isEmpty else { return }
+        refreshing = true
+        fetchProgram(at: 0)
+    }
+
+    private func fetchProgram(at index: Int) {
+        guard refreshing else { return }
+        guard index < channels.count else {
+            refreshing = false
+            status = "番組情報を更新しました"
+            return
+        }
+        let channel = channels[index]
+        status = "番組情報を取得中（\(index + 1)/\(channels.count)）\(channel.name)"
+        let t = coax(["tune", "--ch", channel.channel, "--program"])
+        // 今の番組が届くか、終わるか、時間切れになったら次の局へ
+        let advance = { [weak self, weak t] in
+            guard let self, let t, self.programTuner === t else { return }
+            self.programTimer?.invalidate()
+            self.programTuner = nil
+            t.stop()
+            self.fetchProgram(at: index + 1)
+        }
+        t.onLine = { [weak self] line in
+            let words = line.split(separator: " ", maxSplits: 2)
+            guard let self, words.count == 3, words[1] == "now" else { return }
+            self.programs[channel.channel] = String(words[2])
+            advance()
+        }
+        t.onExit = { _ in advance() }
+        do {
+            let fd = try t.start()
+            programTuner = t
+            // TS は使わないが、読まずに閉じると coax が書き込みで終わるので、読み捨てる
+            DispatchQueue.global().async {
+                var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+                while buffer.withUnsafeMutableBytes({ read(fd, $0.baseAddress, $0.count) }) > 0 {}
+                close(fd)
+            }
+            programTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: false) { _ in
+                MainActor.assumeIsolated { advance() }
+            }
+        } catch {
+            fetchProgram(at: index + 1)
+        }
+    }
+
+    private func cancelRefresh() {
+        guard refreshing else { return }
+        refreshing = false
+        programTimer?.invalidate()
+        programTuner?.stop()
+        programTuner = nil
     }
 
     /// coax を起動するコマンド。--coax 未指定なら、.app に同梱した coax（実行ファイルと同じ場所）を使い、
@@ -145,6 +214,7 @@ final class PlayerModel: ObservableObject {
     }
 
     func play(_ channel: Channel) {
+        cancelRefresh()
         stop()
         // coax pcsc が動いている間は準備を待つ。終わってしまったら、デコーダーを通さずワンセグで再生する
         if decoderPath != nil && pcsc != nil && !pcscReady {
@@ -161,6 +231,7 @@ final class PlayerModel: ObservableObject {
             switch words.count == 3 ? words[1] : "" {
             case "now":
                 self.nowProgram = String(words[2])
+                self.programs[channel.channel] = self.nowProgram
             case "next": break
             default: self.status = line
             }
@@ -285,7 +356,6 @@ final class PlayerModel: ObservableObject {
         playing = nil
         playingChannel = nil
         nowProgram = nil
-        logo = nil
         captionTimer?.invalidate()
         captionTimer = nil
         captionRenderer = nil
@@ -310,10 +380,8 @@ final class PlayerModel: ObservableObject {
 
     /// 局ロゴは数分おきにしか送られないので、受け取ったものを保存しておき、選局したらまずそれを出す
     private func startLogo(_ channel: Channel, _ tee: StreamTee) {
-        let url = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/coax-player/logos/\(channel.channel).png")
+        let url = Self.logoURL(channel)
         var saved = try? Data(contentsOf: url)
-        logo = saved.flatMap(NSImage.init(data:))
         guard let source = channel.logoSource else { return }
         let extractor = LogoExtractor(downloadDataID: source.downloadDataID, logoID: source.logoID)
         extractor.onLogo = { [weak self, weak tee] png in
@@ -321,13 +389,25 @@ final class PlayerModel: ObservableObject {
                 MainActor.assumeIsolated {
                     guard let self, let tee, self.tee === tee, png != saved, let image = NSImage(data: png) else { return }
                     saved = png
-                    self.logo = image
+                    self.logos[channel.channel] = image
                     try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
                     try? png.write(to: url)
                 }
             }
         }
         tee.logos = extractor
+    }
+
+    private static func logoURL(_ channel: Channel) -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/coax-player/logos/\(channel.channel).png")
+    }
+
+    /// 保存してある局ロゴを読む。チャンネル一覧が変わったときに呼ぶ
+    private func loadLogos() {
+        logos = Dictionary(uniqueKeysWithValues: channels.compactMap { channel in
+            NSImage(contentsOf: Self.logoURL(channel)).map { (channel.channel, $0) }
+        })
     }
 
     /// 今の番組名（「開始-終了 番組名」の番組名）
@@ -446,6 +526,7 @@ final class PlayerModel: ObservableObject {
             scanStatus = "範囲を選んでください"
             return
         }
+        cancelRefresh()
         stop()
         let output = URL(fileURLWithPath: config.scanPath)
         do {
@@ -484,6 +565,7 @@ final class PlayerModel: ObservableObject {
                 self.channels = (try? ScanFile.load(self.config.scanPath)) ?? []
                 self.scanStatus = "スキャン完了: \(self.channels.count) チャンネル"
                 self.status = self.scanStatus
+                self.refreshPrograms()
             } else {
                 self.status = "スキャンに失敗しました（設定画面に理由）"
             }
@@ -511,6 +593,7 @@ final class PlayerModel: ObservableObject {
 
     /// アプリ終了時の後始末
     func shutdown() {
+        cancelRefresh()
         debugTimer?.invalidate()
         finishRecording()
         tuner?.stop()

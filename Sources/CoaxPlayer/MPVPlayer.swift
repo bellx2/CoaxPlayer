@@ -102,12 +102,20 @@ final class MPVPlayer {
         trackLock.withLock { self.decoded = decoded }
         // 別の映像になるので、ノイズ除去が前の映像のフレームを参照しないよう作り直す
         renderQueue.async { self.enhancer = nil }
+        clear()
         command(["loadfile", url, "replace"])
     }
 
-
     func stop() {
         command(["stop"])
+        clear()
+    }
+
+    /// 前の映像の最後のフレームを消す。描画キューに残った分の後で消えるよう、描画キューを通す
+    private func clear() {
+        renderQueue.async { [layer] in
+            DispatchQueue.main.async { layer.contents = nil }
+        }
     }
 
     /// 検証用に double のプロパティを読む
