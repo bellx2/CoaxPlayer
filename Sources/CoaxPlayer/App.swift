@@ -19,6 +19,7 @@ struct CoaxPlayerApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor lazy var model = PlayerModel(config: Config.parse(CommandLine.arguments))
     private var signalSources: [DispatchSourceSignal] = []
+    private var keyMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // swift run で起動しても Dock に出て前面に来るようにする
@@ -32,6 +33,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             src.setEventHandler { NSApp.terminate(nil) }
             src.resume()
             signalSources.append(src)
+        }
+
+        // 数字キー（テンキーも）で選局し、映像のページでは delete で一覧に戻る。メインのウィンドウで修飾キーなしのときだけ
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, event.window?.title == "coax",
+                  event.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return event }
+            if event.keyCode == 51 {  // delete
+                let handled = MainActor.assumeIsolated {
+                    guard self.model.playing != nil else { return false }
+                    self.model.backToList()
+                    return true
+                }
+                return handled ? nil : event
+            }
+            guard let key = event.charactersIgnoringModifiers, key.count == 1,
+                  let digit = key.first, digit.isASCII, digit.isNumber else { return event }
+            MainActor.assumeIsolated { self.model.typeDigit(digit) }
+            return nil
         }
 
         MainActor.assumeIsolated { model.startFromArguments() }
@@ -75,7 +94,8 @@ struct ContentView: View {
                 PlayerPage(model: model)
             }
             // 受信状態などの行
-            Text(model.status)
+            // 受信状態の詳細は、設定画面で選んだときだけ出す
+            Text(model.showsReception && model.playing != nil ? model.reception ?? model.status : model.status)
                 .font(.system(size: 12))
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -182,10 +202,9 @@ struct PlayerPage: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                // 一覧に戻ると再生を止め、番組情報を取り直す（Esc でも戻る）
+                // 一覧に戻る（Esc と delete でも戻る）
                 Button {
-                    model.stop()
-                    model.refreshPrograms()
+                    model.backToList()
                 } label: {
                     Label("チャンネル一覧", systemImage: "chevron.left")
                 }
@@ -193,16 +212,18 @@ struct PlayerPage: View {
                 .keyboardShortcut(.cancelAction)
                 Spacer()
                 if model.playingChannel != nil {
-                    ListButton(label: model.recording == nil ? "録画" : "録画停止",
+                    IconButton(symbol: model.recording == nil ? "record.circle" : "record.circle.fill",
+                               help: model.recording == nil ? "録画" : "録画停止",
                                active: model.recording != nil, activeColor: .recording) {
                         model.toggleRecording()
                     }
-                    .fixedSize()
                 }
-                ListButton(label: "字幕", active: model.subtitles) { model.toggleSubtitles() }
-                    .fixedSize()
-                ListButton(label: "ワンセグ", active: model.oneSeg) { model.toggleOneSeg() }
-                    .fixedSize()
+                IconButton(symbol: model.subtitles ? "captions.bubble.fill" : "captions.bubble",
+                           help: "字幕", active: model.subtitles) { model.toggleSubtitles() }
+                IconButton(symbol: "", title: model.dualMono.label,
+                           help: "音声（主・副・主副）", active: model.dualMono != .main) { model.cycleDualMono() }
+                IconButton(symbol: model.oneSeg ? "1.square.fill" : "1.square",
+                           help: "ワンセグ", active: model.oneSeg) { model.toggleOneSeg() }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
@@ -311,6 +332,40 @@ struct ListButton: View {
     }
 }
 
+/// 映像のページの上のアイコンのボタン。名前はカーソルを乗せると出す
+struct IconButton: View {
+    let symbol: String
+    /// アイコンの代わりに出す短い文字
+    var title: String? = nil
+    let help: String
+    let active: Bool
+    /// active のときの背景色
+    var activeColor: Color = .buttonActive
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Group {
+                if let title {
+                    Text(title).font(.system(size: 13, weight: .semibold))
+                } else {
+                    Image(systemName: symbol).font(.system(size: 16))
+                }
+            }
+            .frame(minWidth: 32, minHeight: 26)
+            .padding(.horizontal, title == nil ? 0 : 4)
+            .background(hovering ? Color.buttonHover : active ? activeColor : Color.button)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(help)
+        .accessibilityLabel(help)
+    }
+}
+
 /// MPVPlayer のレイヤを backing layer として使う NSView。
 /// layer-backed にしておくと、レイヤの大きさは AppKit がビューに合わせてくれる
 final class LayerView: NSView {
@@ -376,6 +431,12 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
                 Text("今の一覧: \(model.channels.count) チャンネル。スキャン中は再生を止め、終わると一覧を作り直す")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Section("デバッグ") {
+                Toggle("画面下に受信状態の詳細を表示", isOn: $model.showsReception)
+                Text("CNR、信号の強さ、ビットレート、エラー数など")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

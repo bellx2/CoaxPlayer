@@ -316,6 +316,16 @@ final class MPVPlayer {
         }
     }
 
+    /// 二か国語などのデュアルモノで鳴らす音声（FFmpeg の AAC の dual_mono_mode: main・sub・both）。
+    /// デコーダーの設定なので、音声のトラックを外して付け直し、デコーダーを作り直す
+    func setDualMono(_ mode: String) {
+        guard let mpv else { return }
+        check(mpv_set_property_string(mpv, "ad-lavc-o", "dual_mono_mode=\(mode)"), "ad-lavc-o")
+        guard let aid = stringProperty("aid"), aid != "no" else { return }
+        _ = mpv_set_property_string(mpv, "aid", "no")
+        _ = mpv_set_property_string(mpv, "aid", aid)
+    }
+
     /// ワンセグとフルセグの両方が見られるとき、ワンセグを選ぶか。チャンネルを替えても保つ
     var prefersOneSeg: Bool {
         get { trackLock.withLock { oneSeg } }

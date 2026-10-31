@@ -61,6 +61,11 @@ final class PlayerModel: ObservableObject {
     @Published private(set) var scanning = false
     /// スキャンの進み具合（設定画面に出す）
     @Published private(set) var scanStatus = ""
+    /// coax の受信状態の行（CNR、ビットレートなど）。設定画面で表示を選んだときだけ画面下に出す
+    @Published private(set) var reception: String?
+    @Published var showsReception = UserDefaults.standard.bool(forKey: "showsReception") {
+        didSet { UserDefaults.standard.set(showsReception, forKey: "showsReception") }
+    }
     /// 設定画面で選んだデコーダー。空なら Homebrew で入れたものを探す
     @Published var decoderSetting = UserDefaults.standard.string(forKey: "decoderPath") ?? "" {
         didSet {
@@ -143,6 +148,42 @@ final class PlayerModel: ObservableObject {
         }
     }
 
+    /// 映像のページから一覧に戻る。再生を止め、番組情報を取り直す
+    func backToList() {
+        stop()
+        refreshPrograms()
+    }
+
+    /// 数字キーで打った番号（リモコンの番号）。2 桁の番号を待っている間だけ持つ
+    private var typedNumber = ""
+    private var typedTimer: Timer?
+
+    /// 数字キー（テンキーも）で選局する。続く数字がありうる間は 1 秒待ち、無ければすぐ選ぶ
+    func typeDigit(_ digit: Character) {
+        typedTimer?.invalidate()
+        typedNumber.append(digit)
+        let typed = typedNumber
+        let longer = channels.contains { $0.remoteKey.map(String.init)?.hasPrefix(typed) == true && String($0.remoteKey!) != typed }
+        guard longer else {
+            selectTyped()
+            return
+        }
+        status = "チャンネル \(typed)-"
+        typedTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.selectTyped() }
+        }
+    }
+
+    private func selectTyped() {
+        let typed = typedNumber
+        typedNumber = ""
+        if let channel = channels.first(where: { $0.remoteKey.map(String.init) == typed }) {
+            play(channel)
+        } else {
+            status = "チャンネル \(typed) はありません"
+        }
+    }
+
     /// 一覧のチャンネルを順に短く選局し、今の番組を集める。再生中とスキャン中は何もしない
     func refreshPrograms() {
         guard playing == nil, !refreshing, !scanning, !channels.isEmpty else { return }
@@ -159,7 +200,9 @@ final class PlayerModel: ObservableObject {
         }
         let channel = channels[index]
         status = "番組情報を取得中（\(index + 1)/\(channels.count)）\(channel.name)"
-        let t = coax(["tune", "--ch", channel.channel, "--program"])
+        // 止めた直後は coaxd がまだチューナーを持っていて、続く視聴の選局が in use になる。
+        // 優先度を下げておき、視聴の選局（既定の 0）がチューナーを奪えるようにする
+        let t = coax(["tune", "--ch", channel.channel, "--program", "--priority", "-1"])
         // 今の番組が届くか、終わるか、時間切れになったら次の局へ
         let advance = { [weak self, weak t] in
             guard let self, let t, self.programTuner === t else { return }
@@ -226,14 +269,20 @@ final class PlayerModel: ObservableObject {
         let t = coax(["tune", "--ch", channel.channel, "--stats", "--program"])
         t.onLine = { [weak self, weak t] line in
             guard let self, let t, self.tuner === t else { return }
-            // 「時刻 now|next 開始-終了 番組名」は番組の行、それ以外は受信状態の行
+            // 「時刻 now|next 開始-終了 番組名」は番組の行、「時刻 locked ...」などは受信状態の行、それ以外はエラーなど
             let words = line.split(separator: " ", maxSplits: 2)
             switch words.count == 3 ? words[1] : "" {
             case "now":
                 self.nowProgram = String(words[2])
                 self.programs[channel.channel] = self.nowProgram
             case "next": break
-            default: self.status = line
+            default:
+                if line.range(of: #"^\d\d:\d\d:\d\d "#, options: .regularExpression) != nil {
+                    self.reception = line
+                    if self.status == "選局中..." { self.status = "" }
+                } else {
+                    self.status = line
+                }
             }
             if self.config.debug { FileHandle.standardError.write(Data("stats: \(line)\n".utf8)) }
         }
@@ -356,6 +405,7 @@ final class PlayerModel: ObservableObject {
         playing = nil
         playingChannel = nil
         nowProgram = nil
+        reception = nil
         captionTimer?.invalidate()
         captionTimer = nil
         captionRenderer = nil
@@ -417,6 +467,27 @@ final class PlayerModel: ObservableObject {
 
     func toggleSubtitles() {
         subtitles.toggle()
+    }
+
+    /// デュアルモノで鳴らす音声。主音声、副音声、主と副（左右）の順に切り替える。チャンネルを替えても保つ
+    @Published private(set) var dualMono = DualMono.main
+
+    enum DualMono: String, CaseIterable {
+        case main, sub, both
+
+        var label: String {
+            switch self {
+            case .main: "主"
+            case .sub: "副"
+            case .both: "主副"
+            }
+        }
+    }
+
+    func cycleDualMono() {
+        let all = DualMono.allCases
+        dualMono = all[(all.firstIndex(of: dualMono)! + 1) % all.count]
+        player.setDualMono(dualMono.rawValue)
     }
 
     func toggleOneSeg() {
