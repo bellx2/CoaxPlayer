@@ -60,6 +60,8 @@ final class PlayerModel: ObservableObject {
     private var deviceChecker: CoaxProcess?
     /// 一覧のプレビュー（物理チャンネルごと）。番組情報を取るときにワンセグの映像から作り、保存しておく
     @Published private(set) var previews: [String: NSImage] = [:]
+    /// 前回の起動などで保存したプレビューのうち、まだ取り直していないもの。一覧では薄く出す
+    @Published private(set) var stalePreviews: Set<String> = []
     private var programPreview: PreviewGrabber?
     /// 局ロゴ（物理チャンネルごと）。受け取って保存したものだけ
     @Published private(set) var logos: [String: NSImage] = [:]
@@ -323,6 +325,7 @@ final class PlayerModel: ObservableObject {
                     guard let self else { return }
                     if let jpeg, let image = NSImage(data: jpeg) {
                         self.previews[channel.channel] = image
+                        self.stalePreviews.remove(channel.channel)
                         let url = Self.previewURL(channel)
                         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
                         try? jpeg.write(to: url)
@@ -654,6 +657,7 @@ final class PlayerModel: ObservableObject {
         previews = Dictionary(uniqueKeysWithValues: channels.compactMap { channel in
             NSImage(contentsOf: Self.previewURL(channel)).map { (channel.channel, $0) }
         })
+        stalePreviews = Set(previews.keys)
     }
 
     private static func previewURL(_ channel: Channel) -> URL {

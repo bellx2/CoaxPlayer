@@ -154,10 +154,10 @@ struct ChannelListPage: View {
                 }
                 Spacer()
                 if !model.channels.isEmpty {
-                    ListButton(label: model.refreshing ? "番組情報を取得中…" : "番組情報を更新", active: model.refreshing) {
+                    IconButton(symbol: "arrow.triangle.2.circlepath", help: model.refreshing ? "番組情報を取得中…" : "番組情報を更新",
+                               active: model.refreshing) {
                         model.refreshPrograms()
                     }
-                    .fixedSize()
                 }
             }
             .disabled(model.device == .checking || model.scanning)
@@ -178,6 +178,7 @@ struct ChannelListPage: View {
                         ForEach(model.channels) { channel in
                             ChannelCard(channel: channel, logo: model.logos[channel.channel],
                                         preview: model.previews[channel.channel],
+                                        previewStale: model.stalePreviews.contains(channel.channel),
                                         program: model.programs[channel.channel]) { model.play(channel) }
                         }
                     }
@@ -255,6 +256,8 @@ struct ChannelCard: View {
     let logo: NSImage?
     /// 番組情報を取ったときの映像の 1 コマ。まだ無ければ nil
     let preview: NSImage?
+    /// プレビューが前に保存したもので、まだ取り直していない
+    let previewStale: Bool
     /// 今の番組（「開始-終了 番組名」）。まだ取っていなければ nil
     let program: String?
     let action: () -> Void
@@ -270,6 +273,7 @@ struct ChannelCard: View {
             Group {
                 if let preview {
                     Image(nsImage: preview).resizable().interpolation(.high)
+                        .opacity(previewStale ? 0.4 : 1)
                 } else {
                     Color.logoPlaceholder
                 }
@@ -412,37 +416,6 @@ struct VideoArea: View {
         let sy = video.height / caption.frame.height
         return CGRect(x: video.minX + caption.rect.minX * sx, y: video.minY + caption.rect.minY * sy,
                       width: caption.rect.width * sx, height: caption.rect.height * sy)
-    }
-}
-
-/// 一覧と停止のボタン。押されているチャンネルは青く、カーソルが乗ると明るくする
-struct ListButton: View {
-    let label: String
-    let active: Bool
-    /// active のときの背景色
-    var activeColor: Color = .buttonActive
-    /// 先頭に出す番号（リモコンの番号）
-    var number: String? = nil
-    let action: () -> Void
-    @State private var hovering = false
-
-    var body: some View {
-        HStack(spacing: 6) {
-            if let number {
-                Text(number).monospacedDigit()
-                    .frame(minWidth: 18, alignment: .trailing)
-            }
-            Text(label)
-                .lineLimit(1)
-        }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(hovering ? Color.buttonHover : active ? activeColor : Color.button)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            .contentShape(Rectangle())
-            .onHover { hovering = $0 }
-            .onTapGesture(perform: action)
     }
 }
 
