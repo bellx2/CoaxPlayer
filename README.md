@@ -13,11 +13,23 @@
 
 ## インストール
 
+[Homebrew](https://brew.sh/) で入れる。`/Applications/CoaxPlayer.app` に入る。
+
 ```sh
 brew install --cask bellx2/tap/coaxplayer
 ```
 
-coax と、再生に使うライブラリは `.app` に入っているので、ほかに入れるものは無い。
+更新と削除:
+
+```sh
+brew upgrade --cask coaxplayer
+brew uninstall --cask coaxplayer          # アプリだけ消す
+brew uninstall --cask --zap coaxplayer    # スキャン結果と設定も消す（録画は残る）
+```
+
+Homebrew を使わないときは、[Releases](https://github.com/bellx2/CoaxPlayer/releases) から `CoaxPlayer_<版>_macos-arm64.zip` をダウンロードして展開し、`CoaxPlayer.app` を「アプリケーション」フォルダーに入れる。
+
+どちらも Developer ID で署名し、Apple の公証を受けているので、そのまま開ける。coax と、再生に使うライブラリは `.app` に入っているので、ほかに入れるものは無い。
 
 ## 使い方
 
