@@ -112,9 +112,9 @@ gh release create "$TAG" "$ZIP" "$ZIP.sha256" -R bellx2/CoaxPlayer \
 
 # 初めて置くときと、版を上げるときでコミットの説明を分ける
 if [ -e "$TAP/Casks/coaxplayer.rb" ]; then
-  message="feat: CoaxPlayer $VERSION を届けるため、Cask を更新する"
+  message="chore: CoaxPlayer $VERSION の Cask 更新"
 else
-  message="feat: CoaxPlayer $VERSION を Homebrew で入れられるようにする"
+  message="feat: CoaxPlayer $VERSION の Cask 追加"
 fi
 cp "$CASK" "$TAP/Casks/coaxplayer.rb"
 git -C "$TAP" add Casks/coaxplayer.rb
