@@ -120,7 +120,6 @@ private extension Color {
     static let panel = Color(hex: 0x1c1c1c)
     static let button = Color(hex: 0x2a2a2a)
     static let buttonHover = Color(hex: 0x3a3a3a)
-    static let buttonActive = Color(hex: 0x2f5f9f)
     static let text = Color(hex: 0xe0e0e0)
     static let placeholder = Color(hex: 0x808080)
     static let logoPlaceholder = Color(hex: 0x4a4a4a)
@@ -173,7 +172,7 @@ struct ChannelListPage: View {
                 Spacer()
                 if !model.channels.isEmpty {
                     IconButton(symbol: "arrow.triangle.2.circlepath", help: model.refreshing ? "番組情報を取得中…" : "番組情報を更新",
-                               active: model.refreshing) {
+                               active: model.refreshing, spinning: model.refreshing) {
                         model.refreshPrograms()
                     }
                 }
@@ -348,7 +347,7 @@ struct PlayerPage: View {
                 IconButton(symbol: model.subtitles ? "captions.bubble.fill" : "captions.bubble",
                            help: "字幕", active: model.subtitles) { model.toggleSubtitles() }
                 // 音量。ミュート（M でも切り替える）と、0〜100 のスライダー
-                IconButton(symbol: model.muted ? "speaker.slash.fill" : "speaker.wave.2.fill",
+                IconButton(symbol: model.muted ? "speaker.slash.fill" : "speaker.wave.2",
                            help: model.muted ? "ミュート解除（M）" : "ミュート（M）", active: model.muted) { model.toggleMute() }
                 Slider(value: $model.volume, in: 0...100)
                     .frame(width: 90)
@@ -444,30 +443,49 @@ struct VideoArea: View {
     }
 }
 
-/// 映像のページの上のアイコンのボタン。名前はカーソルを乗せると出す
+/// 上に並べるアイコンのボタン。背景は出さず、オンの状態は塗りのアイコン（symbol を呼び出し側で .fill に替える）と色で示す。
+/// 名前はカーソルを乗せると出す
 struct IconButton: View {
     let symbol: String
-    /// アイコンの代わりに出す短い文字
+    /// アイコンの代わりに出す短い文字。SF Symbols の「1.square」と同じく、オフは枠で囲み、オンは塗った四角に抜く
     var title: String? = nil
     let help: String
     let active: Bool
-    /// active のときの背景色
-    var activeColor: Color = .buttonActive
+    /// active のときのアイコンの色
+    var activeColor: Color = .white
+    /// 処理中はアイコンを回す（1 秒で 1 回転）
+    var spinning = false
     let action: () -> Void
     @State private var hovering = false
+    /// 回し始めた時刻。処理がすぐ終わっても見えるよう、終わったあとも 1 回転の切れ目まで回してから nil に戻す
+    @State private var spinStart: Date?
 
     var body: some View {
         Button(action: action) {
             Group {
                 if let title {
-                    Text(title).font(.system(size: 13, weight: .semibold))
+                    titleGlyph(title)
                 } else {
-                    Image(systemName: symbol).font(.system(size: 16))
+                    // symbolEffect は macOS 14 以降なので、TimelineView で角度を変えて回す
+                    TimelineView(.animation(paused: spinStart == nil)) { context in
+                        let elapsed = spinStart.map { context.date.timeIntervalSince($0) } ?? 0
+                        Image(systemName: symbol).font(.system(size: 16))
+                            .rotationEffect(.degrees(elapsed * 360))
+                    }
+                    .task(id: spinning) {
+                        if spinning {
+                            if spinStart == nil { spinStart = Date() }
+                        } else if let start = spinStart {
+                            let elapsed = Date().timeIntervalSince(start)
+                            try? await Task.sleep(for: .seconds(max(1, elapsed.rounded(.up)) - elapsed))
+                            if !Task.isCancelled { spinStart = nil }
+                        }
+                    }
                 }
             }
-            .frame(minWidth: 32, minHeight: 26)
-            .padding(.horizontal, title == nil ? 0 : 4)
-            .background(hovering ? Color.buttonHover : active ? activeColor : Color.button)
+            .foregroundStyle(active ? activeColor : Color.text)
+            .frame(minWidth: 28, minHeight: 26)
+            .background(hovering ? Color.buttonHover : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .contentShape(Rectangle())
         }
@@ -475,6 +493,20 @@ struct IconButton: View {
         .onHover { hovering = $0 }
         .help(help)
         .accessibilityLabel(help)
+    }
+
+    @ViewBuilder
+    private func titleGlyph(_ title: String) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 3)
+        let text = Text(title)
+            .font(.system(size: 11, weight: .bold))
+            .padding(.horizontal, 2)
+            .frame(minWidth: 18, minHeight: 18)
+        if active {
+            text.foregroundStyle(Color.panel).background(shape.fill(activeColor))
+        } else {
+            text.overlay(shape.stroke(lineWidth: 1.5))
+        }
     }
 }
 
