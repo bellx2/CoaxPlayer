@@ -32,8 +32,32 @@ scripts/bundle.sh で作る CoaxPlayer.app には、scripts/build-deps.sh で
   fast_float        8.3.2      Apache-2.0 OR MIT OR BSL-1.0    LICENSE-*
   Vulkan-Headers    1.4.363.0  Apache-2.0 OR MIT               LICENSE.md, LICENSES/
 
-COAX_DIR を渡して coax と coaxd も同梱するときは、それぞれの条件に従う
-（coax は Apache-2.0、coaxd は GPL-2.0-only。詳しくは coax の NOTICE）。
+--------------------------------------------------------------------------------
+coax と coaxd について
+
+配布する CoaxPlayer.app（GitHub Releases と Homebrew の Cask）には、チューナーを
+扱う coax（クライアント）と coaxd（チューナーのデーモン）を同梱している。
+
+  作者      Till0196
+  上流      https://github.com/Till0196/coax
+  同梱する版  上流の main に、CoaxPlayer のための変更を足した改変版。
+            bellx2/coax の coaxplayer ブランチで、CoaxPlayer の版ごとに
+            coaxplayer-v<版> のタグを付けている。
+  ソース    https://github.com/bellx2/coax/tree/coaxplayer-v<版>
+            （<版> は CoaxPlayer の版。.app の「CoaxPlayer について」で分かる）
+
+  上流に足した変更（どれも bellx2/coax のコミットに残している）
+    - coax tune に --stats（受信状態を 1 秒ごとに出す）を追加
+    - coax tune に --program（今と次の番組を出す）を追加
+    - スキャン結果に局ロゴの情報（ロゴ伝送記述子）を入れる
+    - 同じポートに差し直したデバイスでもカードを読めるよう、応答しないハンドルを
+      捨てて開き直す
+
+  ライセンス
+    coax   Apache-2.0 OR GPL-2.0-or-later（Apache-2.0 だけで受け取ってもよい）
+    coaxd  GPL-2.0-only（GPL-2.0-only の部分を含むため、全体としてこの条件）
+  詳しくは coax の NOTICE にある。ライセンスの全文（GPL-2.0 と Apache-2.0）と
+  coax の NOTICE は、.app の Contents/Resources/licenses/coax/ に入れている。
 
 --------------------------------------------------------------------------------
 LGPL のライブラリについて

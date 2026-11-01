@@ -1,6 +1,6 @@
 # CoaxPlayer
 
-[coax](https://github.com/bellx2/coax) で受信した地上デジタル放送を見るための、macOS 用のプレーヤー。
+[coax](https://github.com/Till0196/coax)（Till0196 さん作）で受信した地上デジタル放送を見るための、macOS 用のプレーヤー。
 
 - チャンネルのスキャンと、局ロゴ・今の番組つきの一覧からの選局
 - ワンセグ・フルセグの再生、ARIB 字幕、二か国語（主・副音声）の切り替え
@@ -58,3 +58,5 @@ Homebrew を使わないときは、[Releases](https://github.com/bellx2/CoaxPla
 
 このリポジトリのコードは MIT ライセンス（[LICENSE](LICENSE)）。
 `.app` に同梱する coax・FFmpeg・mpv などはそれぞれの条件に従う。一覧は [NOTICE](NOTICE)、ライセンスの全文は `.app` の `Contents/Resources/licenses/` にある。
+
+同梱する coax と coaxd は、上流の [Till0196/coax](https://github.com/Till0196/coax) に CoaxPlayer のための変更を足した改変版（coaxd は GPL-2.0-only）。ソースは [bellx2/coax](https://github.com/bellx2/coax) の `coaxplayer-v<版>` のタグにある。
