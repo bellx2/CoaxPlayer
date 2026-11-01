@@ -51,6 +51,9 @@ final class CaptionRenderer {
                 if self.profile == nil {
                     aribcc_decoder_initialize(decoder, ARIBCC_ENCODING_SCHEME_AUTO, ARIBCC_CAPTIONTYPE_CAPTION,
                                               profile, ARIBCC_LANGUAGEID_FIRST)
+                    // 半角の枠（MSZ）の英数字を ASCII に置き換えると、CoreText の描画は縮めずに描くので、
+                    // ヒラギノの数字（幅 0.65 文字）が枠（0.5 文字）からはみ出して重なる。全角のまま半分に縮めて描かせる
+                    aribcc_decoder_set_replace_msz_fullwidth_ascii(decoder, false)
                 } else {
                     aribcc_decoder_set_profile(decoder, profile)
                     aribcc_decoder_flush(decoder)
