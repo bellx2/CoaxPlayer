@@ -29,7 +29,7 @@ FAKE_TS=/path/to/file.ts swift run CoaxPlayer --coax "$PWD/scripts/fake-coax.sh"
 
 次のものを、公式の配布元から取得して SHA-256 を照合し、`.deps/prefix` にビルドする。Homebrew のものは使わない。
 
-- FFmpeg 9.0.2。MPEG-TS、H.264、MPEG-2 映像、AAC と VideoToolbox のみ。録画の MP4 化のために ffmpeg コマンド、MP4 の書き出し、AAC のエンコーダーも
+- FFmpeg 9.0.2。MPEG-TS、H.264、MPEG-2 映像、AAC と VideoToolbox のみ。録画の MP4 化のために ffmpeg コマンド、MP4 の書き出し、AAC のエンコーダーも。一覧のプレビューのために rawvideo の書き出しも
 - libaribcaption 1.1.2（字幕の解読と描画。CoreText で描く）
 - libplacebo、libass ほか
 - mpv 0.41.0（libmpv のみ、`-Dgpl=false`）

@@ -78,7 +78,8 @@ echo "built libaribcaption"
 
 # 放送の TS に要るものだけ：MPEG-TS、H.264、MPEG-2 映像、AAC。デコードは VideoToolbox も使う。
 # h264・aac・mpegvideo のデマルチプレクサーは、PMT より先に届いたストリームの中身を判別するのに要る。
-# 録画の TS から MP4 を作るため、ffmpeg コマンド、MP4 の書き出し、AAC のエンコーダーも入れる
+# 録画の TS から MP4 を作るため、ffmpeg コマンド、MP4 の書き出し、AAC のエンコーダーも入れる。
+# 一覧のプレビュー用に、映像の 1 コマを生の画素で書き出す rawvideo も入れる（画像にするのはアプリ側）
 fetch ffmpeg https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz \
   8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e
 (cd "$SRC/ffmpeg" &&
@@ -93,7 +94,7 @@ fetch ffmpeg https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz \
     --enable-decoder=h264,mpeg2video,aac,aac_latm \
     --enable-hwaccel=h264_videotoolbox,mpeg2_videotoolbox \
     --enable-protocol=file,pipe \
-    --enable-muxer=mp4 --enable-encoder=aac --enable-bsf=aac_adtstoasc \
+    --enable-muxer=mp4,rawvideo --enable-encoder=aac,rawvideo --enable-bsf=aac_adtstoasc \
     --enable-filter=aformat,aresample,anull,format,null,scale,bwdif,yadif >/dev/null &&
   make -j"$JOBS" >/dev/null && make install >/dev/null)
 echo "built ffmpeg"

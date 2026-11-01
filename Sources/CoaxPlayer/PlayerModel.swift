@@ -58,6 +58,9 @@ final class PlayerModel: ObservableObject {
     /// チューナーのデバイスの状態。一覧の左上に出す
     @Published private(set) var device = DeviceState.checking
     private var deviceChecker: CoaxProcess?
+    /// 一覧のプレビュー（物理チャンネルごと）。番組情報を取るときにワンセグの映像から作り、保存しておく
+    @Published private(set) var previews: [String: NSImage] = [:]
+    private var programPreview: PreviewGrabber?
     /// 局ロゴ（物理チャンネルごと）。受け取って保存したものだけ
     @Published private(set) var logos: [String: NSImage] = [:]
     /// 録画中のファイル
@@ -283,13 +286,35 @@ final class PlayerModel: ObservableObject {
         // 止めた直後は coaxd がまだチューナーを持っていて、続く視聴の選局が in use になる。
         // 優先度を下げておき、視聴の選局（既定の 0）がチューナーを奪えるようにする
         let t = coax(["tune", "--ch", channel.channel, "--program", "--priority", "-1"])
-        // 今の番組が届くか、終わるか、時間切れになったら次の局へ
+        // ワンセグの映像の 1 コマをプレビューにする。ワンセグが無い局や ffmpeg が無いときは作らない
+        let preview = channel.oneSegServiceID.flatMap { PreviewGrabber(serviceID: $0, ffmpeg: Self.ffmpeg()) }
+        programPreview = preview
+        var programDone = false
+        var previewDone = preview == nil
+        // 今の番組とプレビューがそろうか、終わるか、時間切れになったら次の局へ
         let advance = { [weak self, weak t] in
             guard let self, let t, self.programTuner === t else { return }
             self.programTimer?.invalidate()
             self.programTuner = nil
+            self.programPreview = nil
+            preview?.stop()
             t.stop()
             self.fetchProgram(at: index + 1)
+        }
+        preview?.onDone = { [weak self] jpeg in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    if let jpeg, let image = NSImage(data: jpeg) {
+                        self.previews[channel.channel] = image
+                        let url = Self.previewURL(channel)
+                        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                        try? jpeg.write(to: url)
+                    }
+                    previewDone = true
+                    if programDone { advance() }
+                }
+            }
         }
         t.onLine = { [weak self] line in
             guard let self else { return }
@@ -300,7 +325,8 @@ final class PlayerModel: ObservableObject {
                 return
             }
             self.programs[channel.channel] = String(words[2])
-            advance()
+            programDone = true
+            if previewDone { advance() }
         }
         t.onExit = { [weak self, weak t] code in
             // 番組が届く前に異常終了したものを失敗として数える（時間切れで止めたものは数えない）
@@ -310,10 +336,15 @@ final class PlayerModel: ObservableObject {
         do {
             let fd = try t.start()
             programTuner = t
-            // TS は使わないが、読まずに閉じると coax が書き込みで終わるので、読み捨てる
+            // プレビューに使うほかは捨てる。読まずに閉じると coax が書き込みで終わるので、終わりまで読む
             DispatchQueue.global().async {
                 var buffer = [UInt8](repeating: 0, count: 64 * 1024)
-                while buffer.withUnsafeMutableBytes({ read(fd, $0.baseAddress, $0.count) }) > 0 {}
+                while true {
+                    let n = buffer.withUnsafeMutableBytes { read(fd, $0.baseAddress, $0.count) }
+                    guard n > 0 else { break }
+                    preview?.feed(buffer[0..<n])
+                }
+                preview?.finish()
                 close(fd)
             }
             programTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: false) { _ in
@@ -332,6 +363,8 @@ final class PlayerModel: ObservableObject {
         programTimer?.invalidate()
         programTuner?.stop()
         programTuner = nil
+        programPreview?.stop()
+        programPreview = nil
     }
 
     /// coax を起動するコマンド。--coax 未指定なら、.app に同梱した coax（実行ファイルと同じ場所）を使い、
@@ -542,11 +575,19 @@ final class PlayerModel: ObservableObject {
             .appendingPathComponent("Library/Application Support/CoaxPlayer/logos/\(channel.channel).png")
     }
 
-    /// 保存してある局ロゴを読む。チャンネル一覧が変わったときに呼ぶ
+    /// 保存してある局ロゴとプレビューを読む。チャンネル一覧が変わったときに呼ぶ
     private func loadLogos() {
         logos = Dictionary(uniqueKeysWithValues: channels.compactMap { channel in
             NSImage(contentsOf: Self.logoURL(channel)).map { (channel.channel, $0) }
         })
+        previews = Dictionary(uniqueKeysWithValues: channels.compactMap { channel in
+            NSImage(contentsOf: Self.previewURL(channel)).map { (channel.channel, $0) }
+        })
+    }
+
+    private static func previewURL(_ channel: Channel) -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/CoaxPlayer/previews/\(channel.channel).jpg")
     }
 
     /// 今の番組名（「開始-終了 番組名」の番組名）
@@ -629,6 +670,21 @@ final class PlayerModel: ObservableObject {
     }
 
     /// 録画の TS から、主音声だけの MP4 を作る。TS は残す。映像はそのまま、音声は主音声だけにして AAC にし直す
+    /// ffmpeg を起動する Process。引数は arguments に足す。
+    /// .app では同梱した ffmpeg、無ければ PATH 上のもの（env は exec するので、止めると ffmpeg が止まる）
+    private static func ffmpeg() -> Process {
+        let process = Process()
+        let bundled = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("ffmpeg")
+        if let bundled, FileManager.default.isExecutableFile(atPath: bundled.path) {
+            process.executableURL = bundled
+            process.arguments = []
+        } else {
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            process.arguments = ["ffmpeg"]
+        }
+        return process
+    }
+
     private func convertToMP4(_ ts: URL, video: Int64?, audio: Int64?) {
         let mp4 = ts.deletingPathExtension().appendingPathExtension("mp4")
         var arguments = ["-hide_banner", "-loglevel", "error", "-y", "-dual_mono_mode", "main", "-i", ts.path]
@@ -637,16 +693,8 @@ final class PlayerModel: ObservableObject {
         }
         arguments += ["-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", mp4.path]
 
-        // .app では同梱した ffmpeg、無ければ PATH 上のもの
-        let process = Process()
-        let bundled = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("ffmpeg")
-        if let bundled, FileManager.default.isExecutableFile(atPath: bundled.path) {
-            process.executableURL = bundled
-            process.arguments = arguments
-        } else {
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            process.arguments = ["ffmpeg"] + arguments
-        }
+        let process = Self.ffmpeg()
+        process.arguments = (process.arguments ?? []) + arguments
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice

@@ -11,6 +11,7 @@
 - `Sources/CoaxPlayer/CoaxProcess.swift` — `coax tune`・`coax scan`・`coax pcsc` とデコーダーの子プロセス。stdout を fd で返し（tune はデコーダーか中継へ）、stderr を 1 行ずつ通知
 - `Sources/CoaxPlayer/StreamTee.swift` — coax の出力を mpv へ中継し、録画中はファイルにも書く。字幕の PES もここで取り出す
 - `Sources/CoaxPlayer/CaptionExtractor.swift` — TS から、再生中の番組の字幕の PES を取り出す
+- `Sources/CoaxPlayer/PreviewGrabber.swift` — 番組情報を取るときの TS からワンセグの映像を抜き出し、ffmpeg で 1 コマを一覧のプレビューにする
 - `Sources/CoaxPlayer/LogoExtractor.swift` — TS の CDT から局ロゴの PNG を取り出し、パレットを足す
 - `Sources/CoaxPlayer/CaptionRenderer.swift` — 字幕を libaribcaption で解読し、映像の表示領域の実ピクセル数で描く
 - `Sources/CoaxPlayer/Updater.swift` — GitHub の最新の Release（API の `releases/latest`）で新しい版を確かめ、Homebrew で入れていれば brew で更新して起動し直す
@@ -27,6 +28,8 @@
 4. 「停止」・チャンネル切替・ウィンドウを閉じる・Ctrl-C/SIGTERM では、子プロセスへ SIGTERM を送り、3 秒で終わらなければ SIGKILL して終了を待つ
 
 一覧の今の番組は、チャンネルを順に `coax tune --ch N --program --priority -1` で選局し（視聴の選局がチューナーを奪えるよう、優先度を下げる）、`now` の行が届いたら（10 秒で届かなければあきらめて）次へ進んで集める。TS は使わないが、読まずに閉じると coax が書き込みで終わるので読み捨てる。
+
+プレビューは、同じ TS から PAT と、ワンセグ（`scan.json` の部分受信のサービス）の PMT・H.264 の映像のパケットだけを抜き出して同梱の ffmpeg に渡し、最初の 1 コマを 320x180 の生の画素（rawvideo）で受け取って JPEG にする（`PreviewGrabber.swift`）。フルセグの映像はスクランブルがかかっていて取り出せず、ほかの番組も渡すと ffmpeg がそれらを調べ終えるまで待つため、ワンセグだけを渡す。番組の行とプレビューの両方がそろったら次の局へ進む。保存先は `~/Library/Application Support/CoaxPlayer/previews/<物理チャンネル>.jpg`。
 
 デバイスの状態は `coax list --tuners --json` で各デバイスを開いて確かめる。`tuners` は開けなくても型番から埋まるので、`probe_error` が無いものだけを見つかったとみなす。選局中は開けないので、確かめる前に番組の取得を止める。coax の再起動は、`pkill -x coaxd` で止めて終わるのを待ち（最大 3 秒）、coax pcsc を立て直してから確かめ直す（coaxd は次の coax が起動する）。
 

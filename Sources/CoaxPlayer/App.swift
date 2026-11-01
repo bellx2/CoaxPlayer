@@ -178,6 +178,7 @@ struct ChannelListPage: View {
                     LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
                         ForEach(model.channels) { channel in
                             ChannelCard(channel: channel, logo: model.logos[channel.channel],
+                                        preview: model.previews[channel.channel],
                                         program: model.programs[channel.channel]) { model.play(channel) }
                         }
                     }
@@ -258,6 +259,8 @@ struct StationLogo: View {
 struct ChannelCard: View {
     let channel: Channel
     let logo: NSImage?
+    /// 番組情報を取ったときの映像の 1 コマ。まだ無ければ nil
+    let preview: NSImage?
     /// 今の番組（「開始-終了 番組名」）。まだ取っていなければ nil
     let program: String?
     let action: () -> Void
@@ -269,6 +272,16 @@ struct ChannelCard: View {
                 .font(.system(size: 26, weight: .semibold))
                 .monospacedDigit()
                 .frame(minWidth: 34, alignment: .trailing)
+            // プレビューがまだ無い局も、局名の位置をそろえる
+            Group {
+                if let preview {
+                    Image(nsImage: preview).resizable().interpolation(.high)
+                } else {
+                    Color.logoPlaceholder
+                }
+            }
+            .frame(width: 112, height: 63)
+            .clipShape(RoundedRectangle(cornerRadius: 4))
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
                     StationLogo(image: logo)
@@ -277,9 +290,9 @@ struct ChannelCard: View {
                         .font(.system(size: 16, weight: .semibold))
                         .lineLimit(1)
                 }
-                // 番組がまだ無いときも高さをそろえる
+                // 番組がまだ無いときも 2 行分の高さをそろえる
                 Text(program ?? " ")
-                    .lineLimit(1)
+                    .lineLimit(2, reservesSpace: true)
                     .truncationMode(.tail)
             }
         }
