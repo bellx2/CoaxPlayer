@@ -215,10 +215,15 @@ final class PlayerModel: ObservableObject {
         return p.terminationStatus
     }
 
-    /// 映像のページから一覧に戻る。再生を止め、番組情報を取り直す
+    /// 映像のページから一覧に戻る。再生を止め、番組情報を取り直す。
+    /// --ch で起動したときはデバイスをまだ確かめていないので、ここで確かめる（見つかれば番組情報も取る）
     func backToList() {
         stop()
-        refreshPrograms()
+        if device == .checking {
+            checkDevices()
+        } else {
+            refreshPrograms()
+        }
     }
 
     /// 数字キーで打った番号（リモコンの番号）。2 桁の番号を待っている間だけ持つ
