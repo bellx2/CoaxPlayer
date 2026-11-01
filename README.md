@@ -1,4 +1,4 @@
-# coax-player
+# CoaxPlayer
 
 [coax](https://github.com/bellx2/coax) で受信した地上デジタル放送を見るための、macOS 用のプレーヤー。
 
@@ -14,7 +14,7 @@
 ## インストール
 
 ```sh
-brew install --cask bellx2/tap/coax-player
+brew install --cask bellx2/tap/coaxplayer
 ```
 
 coax と、再生に使うライブラリは `.app` に入っているので、ほかに入れるものは無い。

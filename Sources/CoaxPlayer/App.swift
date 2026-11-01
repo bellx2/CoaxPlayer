@@ -6,14 +6,34 @@ struct CoaxPlayerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {
-        Window("coax", id: "main") {
+        Window("CoaxPlayer", id: "main") {
             ContentView(model: delegate.model)
         }
         .defaultSize(width: 960, height: 600)
+        .commands {
+            // 「CoaxPlayer について」に作者と GitHub へのリンクを出す
+            CommandGroup(replacing: .appInfo) {
+                Button("CoaxPlayer について") { showAbout() }
+            }
+        }
         Settings {
             SettingsView(model: delegate.model)
         }
     }
+}
+
+@MainActor private func showAbout() {
+    let url = "https://github.com/bellx2/CoaxPlayer"
+    let style = NSMutableParagraphStyle()
+    style.alignment = .center
+    let credits = NSMutableAttributedString(string: "Bellx2\n", attributes: [
+        .font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.labelColor, .paragraphStyle: style,
+    ])
+    credits.append(NSAttributedString(string: url, attributes: [
+        .font: NSFont.systemFont(ofSize: 11), .link: URL(string: url)!, .paragraphStyle: style,
+    ]))
+    NSApp.orderFrontStandardAboutPanel(options: [.credits: credits])
+    NSApp.activate(ignoringOtherApps: true)
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -37,7 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 数字キー（テンキーも）で選局し、映像のページでは delete で一覧に戻る。メインのウィンドウで修飾キーなしのときだけ
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self, event.window?.title == "coax",
+            guard let self, event.window?.title == "CoaxPlayer",
                   event.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return event }
             if event.keyCode == 51 {  // delete
                 let handled = MainActor.assumeIsolated {

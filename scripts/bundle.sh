@@ -2,12 +2,15 @@
 # dist/CoaxPlayer.app を作る。libmpv と依存ライブラリを Contents/Frameworks に入れ、
 # 参照先を @rpath に書き換えて、Homebrew などが無い Mac でも動くようにする。
 # COAX_DIR を指定すると、そこにある coax と coaxd も同梱する。
+# SIGN_IDENTITY を指定すると、その証明書で署名する（配布用。hardened runtime を有効にする）。省略時はアドホック署名。
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 LIB=$ROOT/.deps/prefix/lib
 APP=$ROOT/dist/CoaxPlayer.app
 NAME=CoaxPlayer
+# アプリの版。変えるときは CHANGELOG.md もそろえる（release.sh もここから読む）
+VERSION=1.0.0
 
 cd "$ROOT"
 swift build -c release --product "$NAME"
@@ -17,6 +20,10 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks"
 cp ".build/release/$NAME" "$APP/Contents/MacOS/$NAME"
 # 録画の TS から MP4 を作るのに使う
 cp "$ROOT/.deps/prefix/bin/ffmpeg" "$APP/Contents/MacOS/ffmpeg"
+
+# アイコン（scripts/make-icon.swift で作る）
+mkdir -p "$APP/Contents/Resources"
+cp "$ROOT/Resources/AppIcon.icns" "$APP/Contents/Resources/"
 
 if [ -n "${COAX_DIR:-}" ]; then
   # coax は同じ場所にある coaxd を起動する
@@ -33,7 +40,7 @@ add_license() {
   mkdir -p "$LICENSES/$name"
   cp "$@" "$LICENSES/$name/"
 }
-add_license coax-player "$ROOT/LICENSE" "$ROOT/NOTICE"
+add_license CoaxPlayer "$ROOT/LICENSE" "$ROOT/NOTICE"
 add_license ffmpeg "$SRC/ffmpeg/COPYING.LGPLv2.1" "$SRC/ffmpeg/LICENSE.md"
 add_license mpv "$SRC/mpv/LICENSE.LGPL"
 add_license libplacebo "$SRC/libplacebo/LICENSE"
@@ -54,10 +61,12 @@ cat > "$APP/Contents/Info.plist" <<EOF
 <plist version="1.0">
 <dict>
   <key>CFBundleExecutable</key><string>$NAME</string>
-  <key>CFBundleIdentifier</key><string>jp.bellx2.coax-player</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundleIdentifier</key><string>jp.bellx2.CoaxPlayer</string>
   <key>CFBundleName</key><string>CoaxPlayer</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.1.0</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>CFBundleVersion</key><string>$VERSION</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
 </dict>
@@ -95,12 +104,20 @@ for lib in "$APP"/Contents/Frameworks/*.dylib; do
   install_name_tool -add_rpath @loader_path "$lib" 2>/dev/null || true
 done
 
-# 書き換えで署名が壊れるので、ライブラリから順に署名し直す（ここではアドホック署名）
-codesign --force --sign "${SIGN_IDENTITY:--}" "$APP"/Contents/Frameworks/*.dylib
+# 書き換えで署名が壊れるので、ライブラリから順に署名し直す。
+# 公証には hardened runtime とタイムスタンプが要る（アドホック署名ではどちらも付けない）
+sign() {
+  if [ -n "${SIGN_IDENTITY:-}" ]; then
+    codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$@"
+  else
+    codesign --force --sign - "$@"
+  fi
+}
+sign "$APP"/Contents/Frameworks/*.dylib
 for exe in "$APP"/Contents/MacOS/*; do
-  [ "$exe" = "$APP/Contents/MacOS/$NAME" ] || codesign --force --sign "${SIGN_IDENTITY:--}" "$exe"
+  [ "$exe" = "$APP/Contents/MacOS/$NAME" ] || sign "$exe"
 done
-codesign --force --sign "${SIGN_IDENTITY:--}" "$APP"
+sign "$APP"
 
 # 外部への参照が残っていないことを確かめる（ファイル名の行は除く）
 if otool -L "$APP"/Contents/MacOS/$NAME "$APP"/Contents/MacOS/ffmpeg "$APP"/Contents/Frameworks/*.dylib | grep -v ":$" | grep -E "/opt/homebrew|/usr/local|$ROOT"; then

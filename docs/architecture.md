@@ -40,7 +40,7 @@
 
 1. 中継（`StreamTee.swift`）で TS を読み、CDT のセクションを組み立てる（`LogoExtractor.swift`）
 2. ロゴの PNG にはパレットが無く、ARIB の共通固定色（128 色。0〜64 は不透明、65〜127 は半透明）を使う決まりなので、PLTE と tRNS を足してから画像にする
-3. `~/Library/Application Support/coax-player/logos/<物理チャンネル>.png` に保存し、選局したらまずそれを出す。届いたロゴが保存したものと違えば置き換える
+3. `~/Library/Application Support/CoaxPlayer/logos/<物理チャンネル>.png` に保存し、選局したらまずそれを出す。届いたロゴが保存したものと違えば置き換える
 
 ## mpv の設定
 

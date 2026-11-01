@@ -45,10 +45,31 @@ GPL の部品を含めないので、同梱するライブラリは LGPL など�
 - 参照しているライブラリを `.deps` からたどって `Contents/Frameworks` に集め、参照先を `@rpath` に書き換える
 - `COAX_DIR` を渡すと、coax と coaxd を `Contents/MacOS` に入れる（coax は同じ場所の coaxd を起動する）。録画の MP4 化に使う ffmpeg は常に入れる
 - 同梱するライブラリと coax のライセンスの全文を `Contents/Resources/licenses/` に入れる
-- 既定ではアドホック署名する。`SIGN_IDENTITY` を渡すと、その証明書で署名する（配布には、さらに公証が要る）
+- アイコン `Resources/AppIcon.icns` を入れる。アイコンは `swift scripts/make-icon.swift` で描き直せる（CoreGraphics で描き、`sips` と `iconutil` で .icns にする）
+- 既定ではアドホック署名する。`SIGN_IDENTITY` を渡すと、その証明書で hardened runtime とタイムスタンプ付きで署名する（配布には、さらに公証が要る）
+- アプリの版は `bundle.sh` の `VERSION` に置く。変えるときは `CHANGELOG.md` もそろえる
 - 最後に、外部のライブラリへの参照が残っていないことを確かめる
 
 ## coax の版
 
 `coax tune` の `--stats` と `--program` を使う。どちらも fork（[bellx2/coax](https://github.com/bellx2/coax)）のブランチにある機能で、上流の coax にはまだ無い。
 `bundle.sh` の `COAX_DIR` には、それを含めてビルドした coax を渡す。
+
+## 配布（release.sh）
+
+Homebrew の Cask で配る zip を作る。Developer ID Application の証明書と、公証の認証情報が要る。
+
+```sh
+# 公証の認証情報をキーチェーンに入れる（初回のみ。Apple ID とアプリ用パスワード、または API キー）
+xcrun notarytool store-credentials CoaxPlayer
+
+SIGN_IDENTITY="Developer ID Application: 名前 (チームID)" COAX_DIR=../coax ./scripts/release.sh
+```
+
+1. `CHANGELOG.md` に `VERSION` の項があることを確かめる
+2. `bundle.sh` で署名した `.app` を作り、zip にして公証に出す（`notarytool submit --wait`）
+3. 通ったら公証の結果を `.app` に付け（`stapler staple`）、zip を作り直す
+4. `dist/CoaxPlayer_<版>_macos-arm64.zip`、その `.sha256`、Cask の `dist/coaxplayer.rb` を出す
+
+zip を GitHub Releases の `v<版>` に置き、`dist/coaxplayer.rb` を tap（[bellx2/homebrew-tap](https://github.com/bellx2/homebrew-tap)）の `Casks/` に入れる。
+同梱する coaxd は GPL-2.0-only なので、同じ版のソースを bellx2/coax のタグで公開しておく。

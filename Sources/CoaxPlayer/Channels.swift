@@ -29,10 +29,10 @@ struct ScanRange {
 }
 
 enum ScanFile {
-    /// scan.json の既定の場所。Finder から開くと作業ディレクトリが / なので、ユーザーの領域に置く（coax-gpui と共通）
+    /// scan.json の既定の場所。Finder から開くと作業ディレクトリが / なので、ユーザーの領域に置く
     static var defaultPath: String {
         FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/coax-player/scan.json").path
+            .appendingPathComponent("Library/Application Support/CoaxPlayer/scan.json").path
     }
 
     /// `coax scan` の結果から、受信できたチャンネルだけを並べる

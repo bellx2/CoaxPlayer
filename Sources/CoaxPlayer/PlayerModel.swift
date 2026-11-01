@@ -114,7 +114,7 @@ final class PlayerModel: ObservableObject {
     private var pcscReady = false
     private var pcscWaiting: Channel?
     private let pcscSocket = FileManager.default.temporaryDirectory
-        .appendingPathComponent("coax-player").appendingPathComponent("pcscd.comm")
+        .appendingPathComponent("CoaxPlayer").appendingPathComponent("pcscd.comm")
     /// coax の出力を mpv へ中継し、録画中はファイルにも書く
     private var tee: StreamTee?
     /// 再生中のチャンネル。録画のファイル名と、映像の下の行に使う
@@ -532,7 +532,7 @@ final class PlayerModel: ObservableObject {
 
     private static func logoURL(_ channel: Channel) -> URL {
         FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/coax-player/logos/\(channel.channel).png")
+            .appendingPathComponent("Library/Application Support/CoaxPlayer/logos/\(channel.channel).png")
     }
 
     /// 保存してある局ロゴを読む。チャンネル一覧が変わったときに呼ぶ
