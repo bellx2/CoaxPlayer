@@ -150,6 +150,7 @@ final class PlayerModel: ObservableObject {
     init(config: Config) {
         self.config = config
         player = MPVPlayer(debug: config.debug)
+        player.setVolume(volume)
         channels = (try? ScanFile.load(config.scanPath)) ?? []
         // init の中では didSet が呼ばれないので、ここで読む
         loadLogos()
@@ -693,6 +694,22 @@ final class PlayerModel: ObservableObject {
         let all = DualMono.allCases
         dualMono = all[(all.firstIndex(of: dualMono)! + 1) % all.count]
         player.setDualMono(dualMono.rawValue)
+    }
+
+    /// 音量（0〜100）。チャンネルを替えても保ち、次の起動でも使う。変えるとミュートを解く
+    @Published var volume = UserDefaults.standard.object(forKey: "volume") as? Double ?? 100 {
+        didSet {
+            UserDefaults.standard.set(volume, forKey: "volume")
+            player.setVolume(volume)
+            if muted { toggleMute() }
+        }
+    }
+    /// ミュート。チャンネルを替えても保つ（次の起動には持ち越さない）
+    @Published private(set) var muted = false
+
+    func toggleMute() {
+        muted.toggle()
+        player.setMute(muted)
     }
 
     func toggleOneSeg() {
