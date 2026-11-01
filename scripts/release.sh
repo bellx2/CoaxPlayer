@@ -110,9 +110,15 @@ git -C "$COAX_DIR" push -q origin "$COAX_TAG"
 gh release create "$TAG" "$ZIP" "$ZIP.sha256" -R bellx2/CoaxPlayer \
   --target "$(git -C "$ROOT" rev-parse HEAD)" --title "CoaxPlayer $VERSION" --notes-file "$NOTES"
 
+# 初めて置くときと、版を上げるときでコミットの説明を分ける
+if [ -e "$TAP/Casks/coaxplayer.rb" ]; then
+  message="feat: CoaxPlayer $VERSION を届けるため、Cask を更新する"
+else
+  message="feat: CoaxPlayer $VERSION を Homebrew で入れられるようにする"
+fi
 cp "$CASK" "$TAP/Casks/coaxplayer.rb"
 git -C "$TAP" add Casks/coaxplayer.rb
-git -C "$TAP" commit -q -m "feat: CoaxPlayer $VERSION を Homebrew で入れられるようにする"
+git -C "$TAP" commit -q -m "$message"
 git -C "$TAP" push -q
 
 echo "公開しました: brew install --cask bellx2/tap/coaxplayer"
