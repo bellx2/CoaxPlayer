@@ -79,6 +79,7 @@ final class PlayerModel: ObservableObject {
     @Published var decoderSetting = UserDefaults.standard.string(forKey: "decoderPath") ?? "" {
         didSet {
             UserDefaults.standard.set(decoderSetting, forKey: "decoderPath")
+            decoderFailed = false
             // 次の選局から使う。カードのソケットがまだ無ければ立てる
             if decoderPath != nil && pcsc == nil { startPCSC() }
         }
@@ -108,6 +109,8 @@ final class PlayerModel: ObservableObject {
     }
     /// フルセグを再生できるときも、ワンセグを見る
     @Published private(set) var oneSeg = false
+    /// 今の選局はデコーダーを通していないので、ワンセグしか見られない（フルセグはスクランブルがかかっている）
+    @Published private(set) var oneSegOnly = false
     /// 今の字幕。消えているときは nil。表示しないときも描いておき、切り替えたらすぐ出す
     @Published private(set) var caption: CaptionImage?
     /// 映像の縦横比（表示サイズ）
@@ -125,6 +128,11 @@ final class PlayerModel: ObservableObject {
     /// coax pcsc がソケットを出したか。それまでの選局は pcscWaiting に取っておく
     private var pcscReady = false
     private var pcscWaiting: Channel?
+    /// デコーダーが再生中に終わった（カードが無いなど）。デコーダーを通さず、ワンセグで再生する。
+    /// 選局のたびにカードを確かめ、差し直されていれば戻す。デコーダーの設定を変えたときと、coax を再起動したときも戻す
+    private var decoderFailed = false
+    /// カードを確かめている間の選局。確かめ終わる前にほかを選んだら、前のものは選局しない
+    private var cardChecking: Channel?
     private let pcscSocket = FileManager.default.temporaryDirectory
         .appendingPathComponent("CoaxPlayer").appendingPathComponent("pcscd.comm")
     /// coax の出力を mpv へ中継し、録画中はファイルにも書く
@@ -201,6 +209,7 @@ final class PlayerModel: ObservableObject {
         pcsc?.stop()
         pcsc = nil
         pcscReady = false
+        decoderFailed = false
         device = .checking
         DispatchQueue.global().async { [weak self] in
             // 次の coax が新しい coaxd を立てるので、止まりきるまで待つ（最大 3 秒）
@@ -390,8 +399,34 @@ final class PlayerModel: ObservableObject {
     func play(_ channel: Channel) {
         cancelRefresh()
         stop()
+        guard decoderFailed && decoderPath != nil else {
+            tune(channel)
+            return
+        }
+        // デコーダーをやめたあとは、カードが差し直されていればデコーダーに戻す
+        cardChecking = channel
+        checkCard { [weak self] present in
+            guard let self, self.cardChecking?.channel == channel.channel else { return }
+            self.cardChecking = nil
+            if present { self.decoderFailed = false }
+            self.tune(channel)
+        }
+    }
+
+    /// `coax card --status` でカードが差さっているかを確かめる。確かめられなければ無いとみなす
+    private func checkCard(_ done: @escaping (Bool) -> Void) {
+        let p = coax(["card", "--status", "--json"])
+        guard let fd = try? p.start() else { return done(false) }
+        DispatchQueue.global().async {
+            let data = FileHandle(fileDescriptor: fd, closeOnDealloc: true).readDataToEndOfFile()
+            let present = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["present"] as? Bool ?? false
+            DispatchQueue.main.async { done(present) }
+        }
+    }
+
+    private func tune(_ channel: Channel) {
         // coax pcsc が動いている間は準備を待つ。終わってしまったら、デコーダーを通さずワンセグで再生する
-        if decoderPath != nil && pcsc != nil && !pcscReady {
+        if decoderPath != nil && !decoderFailed && pcsc != nil && !pcscReady {
             pcscWaiting = channel
             status = "デコーダーの準備中..."
             return
@@ -424,7 +459,7 @@ final class PlayerModel: ObservableObject {
         }
         do {
             var fd = try t.start()
-            if let path = decoderPath, pcscReady {
+            if let path = decoderPath, pcscReady, !decoderFailed {
                 let d = CoaxProcess(executable: URL(fileURLWithPath: path), arguments: [], input: fd,
                                     environment: ["PCSCLITE_CSOCK_NAME": pcscSocket.path])
                 watchDecoder(d)
@@ -454,6 +489,7 @@ final class PlayerModel: ObservableObject {
             status = "選局中..."
             // fdclose:// は mpv が読み終えたら fd を閉じる
             player.load("fdclose://\(tee.mpvFD)", decoded: decoder != nil)
+            oneSegOnly = decoder == nil
             startCaptions(tee)
             tee.start()
         } catch {
@@ -508,8 +544,34 @@ final class PlayerModel: ObservableObject {
             guard let self, let d, self.decoder === d else { return }
             self.decoder = nil
             // 止めたときは先に decoder を外すので、ここに来るのは再生中に終わったとき。
-            // カードを読めないときも終了コード 0 で終わるので、コードによらず出す
-            self.status = "デコーダーが終了しました（\(code)）: \(last)"
+            // カードを読めないときは終了コード 0 で何も出さずに終わり、ワンセグまで見られなくなるので、
+            // デコーダーを通さずに選び直す（ワンセグはスクランブルが無いので見られる）
+            self.decoderFailed = true
+            guard let channel = self.current else { return }
+            // 選局を先に止めておく。画面は映像のページのまま
+            self.tuner?.stop()
+            self.tuner = nil
+            let message = "デコーダーが終了したので、ワンセグで再生します（\(code)）: \(last)"
+            self.status = message
+            self.retune(channel, message: message, attempts: 5)
+        }
+    }
+
+    /// 止めた直後は coaxd がまだチューナーを持っていて in use になることがあるので、
+    /// 1 秒おきに選び直す。選局が続いていれば（tuner が残っていれば）やめる
+    private func retune(_ channel: Channel, message: String, attempts: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            // その間にほかのチャンネルを選んだり、一覧に戻ったりしていれば何もしない
+            guard let self, attempts > 0, self.current?.channel == channel.channel, self.tuner == nil else { return }
+            // カードは確かめずにデコーダーなしで選ぶ。確かめると、カード以外の理由で終わるデコーダーを繰り返し使ってしまう
+            self.stop()
+            self.tune(channel)
+            self.status = message
+            // 選局が in use で終わったら tuner が外れるので、もう一度
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                guard let self, self.tuner == nil else { return }
+                self.retune(channel, message: message, attempts: attempts - 1)
+            }
         }
     }
 
@@ -528,6 +590,7 @@ final class PlayerModel: ObservableObject {
         decoder?.stop()
         decoder = nil
         pcscWaiting = nil
+        cardChecking = nil
         tee = nil
         current = nil
         player.stop()
@@ -535,6 +598,7 @@ final class PlayerModel: ObservableObject {
         playingChannel = nil
         nowProgram = nil
         reception = nil
+        oneSegOnly = false
         captionTimer?.invalidate()
         captionTimer = nil
         captionRenderer = nil

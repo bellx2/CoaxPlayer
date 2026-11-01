@@ -60,6 +60,8 @@ cat > "$APP/Contents/Info.plist" <<EOF
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+  <key>CFBundleDevelopmentRegion</key><string>ja</string>
+  <key>CFBundleLocalizations</key><array><string>ja</string></array>
   <key>CFBundleExecutable</key><string>$NAME</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleIdentifier</key><string>jp.bellx2.CoaxPlayer</string>

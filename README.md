@@ -27,7 +27,7 @@ brew uninstall --cask coaxplayer          # アプリだけ消す
 brew uninstall --cask --zap coaxplayer    # スキャン結果と設定も消す（録画は残る）
 ```
 
-新しい版が出ると、一覧の右上に「新しい版 <版> に更新」が出る。押すと Homebrew で更新して起動し直す。
+新しい版が出ると、メニューバーの「CoaxPlayer」に「新しい版 <版> に更新…」が出る。押すと Homebrew で更新して起動し直す。
 
 Homebrew を使わないときは、[Releases](https://github.com/bellx2/CoaxPlayer/releases) から `CoaxPlayer_<版>_macos-arm64.zip` をダウンロードして展開し、`CoaxPlayer.app` を「アプリケーション」フォルダーに入れる。
 
