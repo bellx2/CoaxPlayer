@@ -6,6 +6,16 @@
 coax tune --ch N ──▶ デコーダー ──▶ 中継（字幕・録画）──▶ mpv
 ```
 
+## Homebrew で入れる
+
+macOS 向けにビルドできるようにした libaribb25 を、tap の Formula で入れられる（ソースからビルドする）。
+
+```sh
+brew install bellx2/tap/libaribb25
+```
+
+`/opt/homebrew/bin/arib-b25-stream-test` に入り、設定しなくてもこれを使う。macOS 向けの手当ては [bellx2/libaribb25](https://github.com/bellx2/libaribb25) の README を参照。
+
 ## 指定のしかた
 
 次の順に探し、最初に見つかったものを使う。どれも無ければデコーダーを通さない。
