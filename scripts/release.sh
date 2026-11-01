@@ -77,7 +77,7 @@ cask "coaxplayer" do
   homepage "https://github.com/bellx2/CoaxPlayer"
 
   depends_on arch: :arm64
-  depends_on macos: ">= :ventura"
+  depends_on macos: :ventura
 
   app "CoaxPlayer.app"
 
