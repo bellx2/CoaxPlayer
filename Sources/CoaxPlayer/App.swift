@@ -103,6 +103,7 @@ private extension Color {
     static let buttonActive = Color(hex: 0x2f5f9f)
     static let text = Color(hex: 0xe0e0e0)
     static let placeholder = Color(hex: 0x808080)
+    static let logoPlaceholder = Color(hex: 0x4a4a4a)
     static let recording = Color(hex: 0xb03030)
 }
 
@@ -232,6 +233,28 @@ struct DeviceStatusView: View {
     }
 }
 
+/// 局ロゴ。まだ受け取っていない局は、同じ大きさの灰色の枠にテレビの印を出す（局名の位置もそろう）
+struct StationLogo: View {
+    let image: NSImage?
+
+    var body: some View {
+        if let image {
+            Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit)
+        } else {
+            RoundedRectangle(cornerRadius: 3)
+                .fill(Color.logoPlaceholder)
+                .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                .overlay {
+                    Image(systemName: "tv")
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .padding(5)
+                        .foregroundStyle(Color.placeholder)
+                }
+        }
+    }
+}
+
 struct ChannelCard: View {
     let channel: Channel
     let logo: NSImage?
@@ -248,15 +271,8 @@ struct ChannelCard: View {
                 .frame(minWidth: 34, alignment: .trailing)
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
-                    // ロゴがまだ無い局も、局名の位置をそろえる
-                    Group {
-                        if let logo {
-                            Image(nsImage: logo).resizable().interpolation(.high).aspectRatio(contentMode: .fit)
-                        } else {
-                            Color.clear
-                        }
-                    }
-                    .frame(width: 48, height: 27)
+                    StationLogo(image: logo)
+                        .frame(width: 48, height: 27)
                     Text(channel.name)
                         .font(.system(size: 16, weight: .semibold))
                         .lineLimit(1)
@@ -323,7 +339,8 @@ struct VideoArea: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let video = videoRect(in: geometry.size)
+            let showsInfo = showsInfo(in: geometry.size)
+            let video = videoRect(in: geometry.size, info: showsInfo)
             let pixels = CGSize(width: (video.width * scale).rounded(), height: (video.height * scale).rounded())
             ZStack(alignment: .topLeading) {
                 VideoView(layer: model.player.layer)
@@ -335,16 +352,14 @@ struct VideoArea: View {
                         .frame(width: rect.width, height: rect.height)
                         .offset(x: rect.minX, y: rect.minY)
                 }
-                if let playing = model.playing {
+                if showsInfo, let playing = model.playing {
                     // 「開始-終了 番組名」
                     HStack(spacing: 12) {
                         // チャンネルは「局ロゴ 局名」。ファイルの再生ではファイル名
                         if let channel = model.current {
                             HStack(spacing: 8) {
-                                if let logo = model.logos[channel.channel] {
-                                    Image(nsImage: logo).resizable().interpolation(.high)
-                                        .aspectRatio(contentMode: .fit).frame(height: 30)
-                                }
+                                StationLogo(image: model.logos[channel.channel])
+                                    .frame(width: 53, height: 30)
                                 Text(channel.name)
                             }
                             .font(.system(size: 22, weight: .semibold))
@@ -365,11 +380,17 @@ struct VideoArea: View {
 
     /// 映像の下のチャンネルと番組の行の高さ
     private static let infoHeight: CGFloat = 46
+    /// 映像の幅がこれより狭くなるときは、チャンネルと番組の行を出さずに映像を大きくする
+    private static let infoMinWidth: CGFloat = 560
 
-    /// 映像を置く位置。余白は下と左右に出す。下にはチャンネルと番組の行の分を空けておく
-    private func videoRect(in size: CGSize) -> CGRect {
+    private func showsInfo(in size: CGSize) -> Bool {
+        videoRect(in: size, info: true).width >= Self.infoMinWidth
+    }
+
+    /// 映像を置く位置。余白は下と左右に出す。行を出すときは、下にその分を空けておく
+    private func videoRect(in size: CGSize, info: Bool) -> CGRect {
         let aspect = model.videoAspect
-        let width = min(size.width, max(0, size.height - Self.infoHeight) * aspect)
+        let width = min(size.width, max(0, size.height - (info ? Self.infoHeight : 0)) * aspect)
         let height = width / aspect
         return CGRect(x: (size.width - width) / 2, y: 0, width: width, height: height)
     }
