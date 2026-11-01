@@ -92,8 +92,10 @@ final class PlayerModel: ObservableObject {
 
     /// 中止したスキャンがあり、次は続きから始める
     private var scanResumable = false
-    /// 字幕を表示するか。チャンネルを替えても保つ
-    @Published private(set) var subtitles = true
+    /// 字幕を表示するか。チャンネルを替えても保ち、次の起動でも使う（最初は非表示）
+    @Published private(set) var subtitles = UserDefaults.standard.bool(forKey: "subtitles") {
+        didSet { UserDefaults.standard.set(subtitles, forKey: "subtitles") }
+    }
     /// フルセグを再生できるときも、ワンセグを見る
     @Published private(set) var oneSeg = false
     /// 今の字幕。消えているときは nil。表示しないときも描いておき、切り替えたらすぐ出す
