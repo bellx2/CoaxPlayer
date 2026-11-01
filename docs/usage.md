@@ -28,6 +28,12 @@
 
 チャンネルは `scan.json` にあるものからしか選べない。
 
+## 更新
+
+起動したときに（1 日 1 回まで）GitHub の最新の Release を確かめ、新しい版があれば一覧の右上に「新しい版 <版> に更新」を出す。
+押すと、Homebrew で入れていれば `brew update` と `brew upgrade --cask coaxplayer` で更新して起動し直す。Homebrew で入れていなければ、Release のページを開く。
+確かめられなかったときは何も出さず、次の起動で試す。
+
 ## 起動引数
 
 ```sh

@@ -7,7 +7,7 @@ struct CoaxPlayerApp: App {
 
     var body: some Scene {
         Window("CoaxPlayer", id: "main") {
-            ContentView(model: delegate.model)
+            ContentView(model: delegate.model, updater: delegate.updater)
         }
         .defaultSize(width: 960, height: 600)
         .commands {
@@ -38,6 +38,7 @@ struct CoaxPlayerApp: App {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor lazy var model = PlayerModel(config: Config.parse(CommandLine.arguments))
+    @MainActor lazy var updater = Updater()
     private var signalSources: [DispatchSourceSignal] = []
     private var keyMonitor: Any?
 
@@ -73,7 +74,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return nil
         }
 
-        MainActor.assumeIsolated { model.startFromArguments() }
+        MainActor.assumeIsolated {
+            model.startFromArguments()
+            updater.check()
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -105,11 +109,12 @@ private extension Color {
 /// 1 ページ目はチャンネル一覧、選ぶと映像のページに切り替わる。下に受信状態の行
 struct ContentView: View {
     @ObservedObject var model: PlayerModel
+    let updater: Updater
 
     var body: some View {
         VStack(spacing: 0) {
             if model.playing == nil {
-                ChannelListPage(model: model)
+                ChannelListPage(model: model, updater: updater)
             } else {
                 PlayerPage(model: model)
             }
@@ -134,6 +139,7 @@ struct ContentView: View {
 /// チャンネル一覧。番号、局ロゴ（受け取ったことがあれば）、局名、今の番組のカードを 2 列に並べる
 struct ChannelListPage: View {
     @ObservedObject var model: PlayerModel
+    @ObservedObject var updater: Updater
 
     var body: some View {
         VStack(spacing: 0) {
@@ -146,6 +152,7 @@ struct ChannelListPage: View {
                     model.restartCoax()
                 }
                 Spacer()
+                UpdateButton(updater: updater)
                 if !model.channels.isEmpty {
                     ListButton(label: model.refreshing ? "番組情報を取得中…" : "番組情報を更新", active: model.refreshing) {
                         model.refreshPrograms()
@@ -176,6 +183,31 @@ struct ChannelListPage: View {
                     .padding(16)
                 }
             }
+        }
+    }
+}
+
+/// 新しい版があるときだけ出す。押すと更新する（Homebrew で入れていなければ Release のページを開く）
+struct UpdateButton: View {
+    @ObservedObject var updater: Updater
+
+    var body: some View {
+        switch updater.state {
+        case .idle:
+            EmptyView()
+        case .available(let version):
+            ListButton(label: "新しい版 \(version) に更新", active: true) { updater.update() }
+                .fixedSize()
+        case .updating:
+            ListButton(label: "更新中…", active: true) {}
+                .fixedSize()
+        case .failed(let reason):
+            // 失敗したら Release のページから入れてもらう
+            ListButton(label: "更新に失敗しました（Release を開く）", active: false) {
+                NSWorkspace.shared.open(Updater.releasesURL)
+            }
+            .fixedSize()
+            .help(reason)
         }
     }
 }

@@ -13,6 +13,7 @@
 - `Sources/CoaxPlayer/CaptionExtractor.swift` — TS から、再生中の番組の字幕の PES を取り出す
 - `Sources/CoaxPlayer/LogoExtractor.swift` — TS の CDT から局ロゴの PNG を取り出し、パレットを足す
 - `Sources/CoaxPlayer/CaptionRenderer.swift` — 字幕を libaribcaption で解読し、映像の表示領域の実ピクセル数で描く
+- `Sources/CoaxPlayer/Updater.swift` — GitHub の最新の Release（API の `releases/latest`）で新しい版を確かめ、Homebrew で入れていれば brew で更新して起動し直す
 - `Sources/CoaxPlayer/Channels.swift` — `scan.json` から受信できたチャンネルを読む（リモコンの番号、局ロゴの在りかも）。スキャンで選べる範囲
 - `scripts/build-deps.sh` — libmpv と依存ライブラリのビルド
 - `scripts/bundle.sh` — `.app` の組み立て
