@@ -93,13 +93,13 @@ NOTES=$ROOT/dist/release-notes.md
 {
   awk -v v="$VERSION" '$0 ~ "^## " v " " {f=1; next} /^## / {f=0} f' "$ROOT/CHANGELOG.md"
   echo
-  echo "同梱の coax: $COAX_VERSION（ソース: https://github.com/bellx2/coax/tree/$COAX_TAG）"
+  echo "同梱の coax: ${COAX_VERSION}（ソース: https://github.com/bellx2/coax/tree/${COAX_TAG}）"
 } > "$NOTES"
 
 echo
 echo "公開するもの:"
-echo "  GitHub Releases: bellx2/CoaxPlayer $TAG（$(basename "$ZIP")）"
-echo "  coax のタグ: bellx2/coax $COAX_TAG（$COAX_COMMIT）"
+echo "  GitHub Releases: bellx2/CoaxPlayer ${TAG}（$(basename "$ZIP")）"
+echo "  coax のタグ: bellx2/coax ${COAX_TAG}（${COAX_COMMIT}）"
 echo "  Cask: $TAP/Casks/coaxplayer.rb"
 read -r -p "公開しますか [y/N] " answer
 [ "$answer" = y ] || fail "公開を中止しました（作ったものは dist/ に残っています）"
