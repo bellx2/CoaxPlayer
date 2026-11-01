@@ -58,7 +58,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             signalSources.append(src)
         }
 
-        // 数字キー（テンキーも）で選局し、映像のページでは delete で一覧に戻る。メインのウィンドウで修飾キーなしのときだけ
+        // 数字キー（テンキーも）で選局し、映像のページでは delete で一覧に戻り、上下の矢印で音量を変え、M でミュートを切り替える。
+        // メインのウィンドウで修飾キーなしのときだけ
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, event.window?.title == "CoaxPlayer",
                   event.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return event }
@@ -70,8 +71,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 return handled ? nil : event
             }
-            guard let key = event.charactersIgnoringModifiers, key.count == 1,
-                  let digit = key.first, digit.isASCII, digit.isNumber else { return event }
+            if event.keyCode == 126 || event.keyCode == 125 {  // 上・下の矢印で音量を 5 ずつ変える
+                let step: Double = event.keyCode == 126 ? 5 : -5
+                let handled = MainActor.assumeIsolated {
+                    guard self.model.playing != nil else { return false }
+                    self.model.volume = min(100, max(0, self.model.volume + step))
+                    return true
+                }
+                return handled ? nil : event
+            }
+            guard let key = event.charactersIgnoringModifiers, key.count == 1 else { return event }
+            if key.lowercased() == "m" {
+                let handled = MainActor.assumeIsolated {
+                    guard self.model.playing != nil else { return false }
+                    self.model.toggleMute()
+                    return true
+                }
+                return handled ? nil : event
+            }
+            guard let digit = key.first, digit.isASCII, digit.isNumber else { return event }
             MainActor.assumeIsolated { self.model.typeDigit(digit) }
             return nil
         }
@@ -329,6 +347,13 @@ struct PlayerPage: View {
                 }
                 IconButton(symbol: model.subtitles ? "captions.bubble.fill" : "captions.bubble",
                            help: "字幕", active: model.subtitles) { model.toggleSubtitles() }
+                // 音量。ミュート（M でも切り替える）と、0〜100 のスライダー
+                IconButton(symbol: model.muted ? "speaker.slash.fill" : "speaker.wave.2.fill",
+                           help: model.muted ? "ミュート解除（M）" : "ミュート（M）", active: model.muted) { model.toggleMute() }
+                Slider(value: $model.volume, in: 0...100)
+                    .frame(width: 90)
+                    .controlSize(.small)
+                    .help("音量（上下の矢印）")
                 IconButton(symbol: "", title: model.dualMono.label,
                            help: "音声（主・副・主副）", active: model.dualMono != .main) { model.cycleDualMono() }
                 // デコーダーを通していないときはワンセグしか見られないので、点けたままにして押せなくする

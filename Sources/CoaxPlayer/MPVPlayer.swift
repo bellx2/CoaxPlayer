@@ -310,6 +310,9 @@ final class MPVPlayer {
                 }
             case MPV_EVENT_FILE_LOADED:
                 if debug { log("file-loaded") }
+            case MPV_EVENT_AUDIO_RECONFIG:
+                // 音量とミュートはメインスレッドで変えるので、掛け直しもメインスレッドで行う
+                DispatchQueue.main.async { [weak self] in self?.applyAudioLevel() }
             default:
                 break
             }
@@ -324,6 +327,29 @@ final class MPVPlayer {
         guard let aid = stringProperty("aid"), aid != "no" else { return }
         _ = mpv_set_property_string(mpv, "aid", "no")
         _ = mpv_set_property_string(mpv, "aid", aid)
+    }
+
+    /// 音量（0〜100）とミュート。avfoundation の出力は約 2 秒先まで音声をためるので、mpv の volume・mute
+    /// （ためる前に掛かる）ではすぐに変わらない。出力側の ao-volume・ao-mute で変える。
+    /// 出力は選局などで作り直されて設定が消えるので、作り直されたら（AUDIO_RECONFIG）掛け直す
+    private var volume = 100.0
+    private var muted = false
+
+    func setVolume(_ volume: Double) {
+        self.volume = volume
+        applyAudioLevel()
+    }
+
+    func setMute(_ mute: Bool) {
+        muted = mute
+        applyAudioLevel()
+    }
+
+    /// 出力がまだ無いとき（再生前）は失敗するが、作り直されたときに掛けるので無視する
+    private func applyAudioLevel() {
+        guard let mpv else { return }
+        _ = mpv_set_property_string(mpv, "ao-volume", String(volume))
+        _ = mpv_set_property_string(mpv, "ao-mute", muted ? "yes" : "no")
     }
 
     /// ワンセグとフルセグの両方が見られるとき、ワンセグを選ぶか。チャンネルを替えても保つ
