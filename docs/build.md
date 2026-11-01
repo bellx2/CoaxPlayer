@@ -52,12 +52,13 @@ GPL の部品を含めないので、同梱するライブラリは LGPL など�
 
 ## coax の版
 
-`coax tune` の `--stats` と `--program` を使う。どちらも fork（[bellx2/coax](https://github.com/bellx2/coax)）のブランチにある機能で、上流の coax にはまだ無い。
-`bundle.sh` の `COAX_DIR` には、それを含めてビルドした coax を渡す。
+`coax tune` の `--stats` と `--program`、スキャン結果の局ロゴの情報を使う。どれも fork（[bellx2/coax](https://github.com/bellx2/coax)）の `coaxplayer` ブランチにある機能で、上流の coax にはまだ無い。
+`coaxplayer` ブランチは、上流の main にこれらの変更を乗せたもの。上流に追従するときもこのブランチを更新し、リリースごとに `coaxplayer-v<版>` のタグを付ける。
+`bundle.sh` の `COAX_DIR` には、このブランチでビルドした coax を渡す。
 
-## 配布（release.sh）
+## リリース（release.sh）
 
-Homebrew の Cask で配る zip を作る。Developer ID Application の証明書と、公証の認証情報が要る。
+署名と公証をした zip を GitHub Releases に上げ、tap の Cask を更新するところまでを 1 回で行う。Developer ID Application の証明書と、公証の認証情報が要る。
 
 ```sh
 # 公証の認証情報をキーチェーンに入れる（初回のみ。Apple ID とアプリ用パスワード、または API キー）
@@ -66,10 +67,14 @@ xcrun notarytool store-credentials CoaxPlayer
 SIGN_IDENTITY="Developer ID Application: 名前 (チームID)" COAX_DIR=../coax ./scripts/release.sh
 ```
 
-1. `CHANGELOG.md` に `VERSION` の項があることを確かめる
-2. `bundle.sh` で署名した `.app` を作り、zip にして公証に出す（`notarytool submit --wait`）
-3. 通ったら公証の結果を `.app` に付け（`stapler staple`）、zip を作り直す
-4. `dist/CoaxPlayer_<版>_macos-arm64.zip`、その `.sha256`、Cask の `dist/coaxplayer.rb` を出す
+1. 公開できる状態かを先に確かめる
+   - `CHANGELOG.md` に `## <版> - <日付>` の項がある（`未リリース` のままなら止める）
+   - 作業ツリーに変更が無く、main を push 済みで、`v<版>` のタグがまだ無い
+   - `COAX_DIR` の coax が `coaxplayer` ブランチで、変更が無く、bellx2/coax に push 済み
+   - tap（`brew tap bellx2/tap`）に変更が無い
+2. `COAX_DIR` で coax と coaxd をビルドし、`bundle.sh` で署名した `.app` を作る
+3. zip にして公証に出し（`notarytool submit --wait`）、通ったら公証の結果を `.app` に付けて（`stapler staple`）zip を作り直す
+4. `dist/` に zip、その `.sha256`、Cask（`coaxplayer.rb`）、リリースノートを作る。リリースノートは `CHANGELOG.md` の項と、同梱した coax のソースへのリンク（coaxd は GPL-2.0-only のため）
+5. 確認のあと、bellx2/coax に `coaxplayer-v<版>` のタグを付けて push し、GitHub Releases に `v<版>` を作って zip を上げ、tap の `Casks/coaxplayer.rb` を更新してコミット・push する
 
-zip を GitHub Releases の `v<版>` に置き、`dist/coaxplayer.rb` を tap（[bellx2/homebrew-tap](https://github.com/bellx2/homebrew-tap)）の `Casks/` に入れる。
-同梱する coaxd は GPL-2.0-only なので、同じ版のソースを bellx2/coax のタグで公開しておく。
+版を上げるときは、`bundle.sh` の `VERSION` と `CHANGELOG.md` の項をそろえる。
