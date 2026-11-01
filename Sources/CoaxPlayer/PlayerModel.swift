@@ -84,6 +84,13 @@ final class PlayerModel: ObservableObject {
         }
     }
     static let homebrewDecoderPath = "/opt/homebrew/bin/arib-b25-stream-test"
+    /// 録画を止めたあとに ffmpeg に渡す引数。空なら TS のまま残す。
+    /// {in} は TS のパス、{out} は拡張子を除いたパス、{video}・{audio} は止めた時点で再生していた映像と音声
+    @Published var convertArguments = UserDefaults.standard.string(forKey: "convertArguments") ?? "" {
+        didSet { UserDefaults.standard.set(convertArguments, forKey: "convertArguments") }
+    }
+    /// 設定画面の「例を入れる」で入れる引数。主音声だけの MP4 にする
+    static let convertExample = "-dual_mono_mode main -i {in} -map {video} -map {audio} -c:v copy -c:a aac -b:a 128k -movflags +faststart {out}.mp4"
 
     /// 選局した TS を通す外部のデコーダー。stdin から TS を読んで stdout に書くもの。
     /// 起動引数、設定画面、Homebrew で入れたものの順に探し、どれも無ければワンセグを再生する
@@ -663,10 +670,10 @@ final class PlayerModel: ObservableObject {
         guard let url = recording else { return }
         tee?.stopRecording()
         recording = nil
-        // 再生中の映像と音声を MP4 に入れる。フルセグも届いているときに、再生していない方を選ばないため
+        // 変換では再生中の映像と音声を選べるようにする。フルセグも届いているときに、再生していない方を選ばないため
         let video = player.int64Property("current-tracks/video/src-id")
         let audio = player.int64Property("current-tracks/audio/src-id")
-        convertToMP4(url, video: video, audio: audio)
+        convert(url, video: video, audio: audio)
     }
 
     /// 録画の TS から、主音声だけの MP4 を作る。TS は残す。映像はそのまま、音声は主音声だけにして AAC にし直す
@@ -685,21 +692,27 @@ final class PlayerModel: ObservableObject {
         return process
     }
 
-    private func convertToMP4(_ ts: URL, video: Int64?, audio: Int64?) {
-        let mp4 = ts.deletingPathExtension().appendingPathExtension("mp4")
-        var arguments = ["-hide_banner", "-loglevel", "error", "-y", "-dual_mono_mode", "main", "-i", ts.path]
-        if let video, let audio {
-            arguments += ["-map", "0:i:\(video)", "-map", "0:i:\(audio)"]
+    /// 設定画面の引数で、録画した TS を ffmpeg で変換する。引数が空なら何もしない（TS は残る）
+    private func convert(_ ts: URL, video: Int64?, audio: Int64?) {
+        let template = convertArguments.split(whereSeparator: \.isWhitespace)
+        guard !template.isEmpty else { return }
+        // 空白で分けてから置き換えるので、パスに空白があっても 1 つの引数のまま渡る
+        let values = [
+            "{in}": ts.path,
+            "{out}": ts.deletingPathExtension().path,
+            "{video}": video.map { "0:i:\($0)" } ?? "0:v:0",
+            "{audio}": audio.map { "0:i:\($0)" } ?? "0:a:0",
+        ]
+        let arguments = template.map { word in
+            values.reduce(String(word)) { $0.replacingOccurrences(of: $1.key, with: $1.value) }
         }
-        arguments += ["-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", mp4.path]
-
         let process = Self.ffmpeg()
-        process.arguments = (process.arguments ?? []) + arguments
+        process.arguments = (process.arguments ?? []) + ["-hide_banner", "-loglevel", "error", "-y"] + arguments
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         // 画面には出さないので、失敗したときだけ stderr に残す
-        let failed = "MP4 にできませんでした（TS は保存済み）: \(ts.path)\n"
+        let failed = "録画を変換できませんでした（TS は保存済み）: \(ts.path)\n"
         process.terminationHandler = { finished in
             if finished.terminationStatus != 0 { FileHandle.standardError.write(Data(failed.utf8)) }
         }
@@ -709,6 +722,7 @@ final class PlayerModel: ObservableObject {
             FileHandle.standardError.write(Data(failed.utf8))
         }
     }
+
 
     /// ~/Movies/coax/日時_リモコンの番号_局名_番組名.ts
     private func recordingURL(_ channel: Channel) -> URL {

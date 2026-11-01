@@ -575,6 +575,19 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            Section("録画の変換") {
+                TextField("ffmpeg の引数", text: $model.convertArguments, prompt: Text("空なら TS のまま"), axis: .vertical)
+                    .font(.system(.caption, design: .monospaced))
+                    .lineLimit(2...4)
+                HStack {
+                    Button("例を入れる") { model.convertArguments = PlayerModel.convertExample }
+                    Button("消す") { model.convertArguments = "" }
+                        .disabled(model.convertArguments.isEmpty)
+                }
+                Text("録画を止めたあと、同梱の ffmpeg にこの引数を渡す。{in} は TS、{out} は拡張子を除いたパス、{video}・{audio} は再生していた映像と音声。例は主音声だけの MP4 を作る")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .frame(width: 480)
