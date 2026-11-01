@@ -329,13 +329,8 @@ struct PlayerPage: View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 // 一覧に戻る（Esc と delete でも戻る）
-                Button {
-                    model.backToList()
-                } label: {
-                    Label("チャンネル一覧", systemImage: "chevron.left")
-                }
-                .buttonStyle(.plain)
-                .keyboardShortcut(.cancelAction)
+                IconButton(symbol: "chevron.left", help: "チャンネル一覧（Esc）", active: false) { model.backToList() }
+                    .keyboardShortcut(.cancelAction)
                 Spacer()
                 if model.playingChannel != nil {
                     IconButton(symbol: model.recording == nil ? "record.circle" : "record.circle.fill",
