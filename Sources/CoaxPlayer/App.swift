@@ -58,7 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             signalSources.append(src)
         }
 
-        // 数字キー（テンキーも）で選局し、映像のページでは delete で一覧に戻り、上下の矢印で音量を変え、M でミュートを切り替える。
+        // 数字キー（テンキーも）で選局し、映像のページでは delete で一覧に戻り、上下の矢印で音量を変え、M でミュートを、I で番組詳細を切り替える。
         // メインのウィンドウで修飾キーなしのときだけ
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, event.window?.title == "CoaxPlayer",
@@ -85,6 +85,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let handled = MainActor.assumeIsolated {
                     guard self.model.playing != nil else { return false }
                     self.model.toggleMute()
+                    return true
+                }
+                return handled ? nil : event
+            }
+            if key.lowercased() == "i" {
+                let handled = MainActor.assumeIsolated {
+                    guard self.model.playingChannel != nil else { return false }
+                    self.model.showsDetail.toggle()
                     return true
                 }
                 return handled ? nil : event
@@ -333,6 +341,8 @@ struct PlayerPage: View {
                     .keyboardShortcut(.cancelAction)
                 Spacer()
                 if model.playingChannel != nil {
+                    IconButton(symbol: model.showsDetail ? "info.circle.fill" : "info.circle",
+                               help: "番組詳細（I）", active: model.showsDetail) { model.showsDetail.toggle() }
                     IconButton(symbol: model.recording == nil ? "record.circle" : "record.circle.fill",
                                help: model.recording == nil ? "録画" : "録画停止",
                                active: model.recording != nil, activeColor: .recording) {
@@ -361,7 +371,67 @@ struct PlayerPage: View {
             .padding(.vertical, 6)
             .background(Color.panel)
             VideoArea(model: model)
+                // 映像の右に重ねる。ファイルの再生には番組情報が無いので、チャンネルを見ているときだけ出す
+                .overlay(alignment: .trailing) {
+                    if model.showsDetail && model.playingChannel != nil {
+                        ProgramPanel(detail: model.nowDetail)
+                            .frame(width: 320)
+                    }
+                }
         }
+    }
+}
+
+/// 今の番組の詳細。映像の右に重ねて出す。番組情報（EIT）の説明と、届いていれば詳しい説明の項目を出す
+struct ProgramPanel: View {
+    let detail: ProgramDetail?
+
+    var body: some View {
+        ScrollView {
+            content
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        // 映像に重ねるので、下の映像が少し透けるようにする
+        .background(Color.panel.opacity(0.85))
+        .foregroundStyle(Color.text)
+    }
+
+    private var content: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let detail {
+                Text(detail.span).font(.system(size: 12)).foregroundStyle(Color.placeholder)
+                Text(detail.title).font(.system(size: 15, weight: .semibold))
+                if !detail.text.isEmpty {
+                    Text(Self.linked(detail.text)).font(.system(size: 13))
+                }
+                ForEach(detail.items) { item in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(item.heading).font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.placeholder)
+                        Text(Self.linked(item.value)).font(.system(size: 13))
+                    }
+                }
+            } else {
+                Text("番組情報を待っています").font(.system(size: 13)).foregroundStyle(Color.placeholder)
+            }
+        }
+        .textSelection(.enabled)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// 文中の http・https の URL をリンクにする。放送では URL が全角で来ることがあるので、
+    /// 全角の英数字と記号を半角に直した写しで探し、見た目は元の文字のままリンクを付ける
+    static func linked(_ text: String) -> AttributedString {
+        // 全角の ASCII（U+FF01〜FF5E）だけを半角に直す。UTF-16 の長さが変わらないので、見つけた位置をそのまま元の文に使える
+        let folded = String(decoding: text.utf16.map { (0xff01...0xff5e).contains($0) ? $0 - 0xfee0 : $0 }, as: UTF16.self)
+        var result = AttributedString(text)
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return result }
+        for match in detector.matches(in: folded, range: NSRange(location: 0, length: (folded as NSString).length)) {
+            guard let url = match.url, ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+                  let range = Range(match.range, in: text), let attributed = Range(range, in: result) else { continue }
+            result[attributed].link = url
+        }
+        return result
     }
 }
 
