@@ -290,10 +290,18 @@ struct ChannelCard: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            Text(channel.number)
-                .font(.system(size: 26, weight: .semibold))
-                .monospacedDigit()
-                .frame(minWidth: 34, alignment: .trailing)
+            // リモコンの番号を四角で囲み、その下に 3 桁番号を出す
+            VStack(spacing: 5) {
+                Text(channel.remoteKey.map(String.init) ?? "-")
+                    .font(.system(size: 20, weight: .semibold))
+                    .monospacedDigit()
+                    .frame(width: 40, height: 34)
+                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.text, lineWidth: 1.5))
+                Text(channel.threeDigitNumber ?? " ")
+                    .font(.system(size: 11))
+                    .monospacedDigit()
+                    .foregroundStyle(Color.placeholder)
+            }
             // プレビューがまだ無い局も、局名の位置をそろえる
             Group {
                 if let preview {

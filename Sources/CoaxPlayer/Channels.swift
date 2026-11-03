@@ -11,9 +11,17 @@ struct Channel: Identifiable {
     var logoSource: (downloadDataID: Int, logoID: Int)? = nil
     /// ワンセグの番組番号（部分受信のサービス）。一覧のプレビューに使う
     var oneSegServiceID: Int? = nil
+    /// 最初の番組（局名を取るサービス）の番組番号。3 桁番号に使う
+    var serviceID: Int? = nil
 
     /// 画面に出す番号。リモコンの番号が無ければ物理チャンネル
     var number: String { remoteKey.map(String.init) ?? "\(channel)ch" }
+
+    /// 3 桁番号（011 など）。リモコンの番号 × 10 + 番組番号の下 3 ビット + 1（ARIB TR-B14）
+    var threeDigitNumber: String? {
+        guard let remoteKey, let serviceID else { return nil }
+        return String(format: "%03d", remoteKey * 10 + (serviceID & 0x7) + 1)
+    }
 
     var id: String { channel }
 }
@@ -67,7 +75,7 @@ enum ScanFile {
                 : nil
             let oneSeg = services?.first { $0["partial_reception"] as? Bool == true }?["service_id"] as? Int
             return Channel(channel: channel, name: name, remoteKey: remoteKey, logoSource: logoSource,
-                           oneSegServiceID: oneSeg)
+                           oneSegServiceID: oneSeg, serviceID: services?.first?["service_id"] as? Int)
         }
         // リモコンの番号の順に並べる。番号の無いものは、スキャンした順のまま後ろへ
         return channels.enumerated().sorted {
