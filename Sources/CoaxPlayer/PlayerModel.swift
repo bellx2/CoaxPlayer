@@ -46,6 +46,12 @@ final class PlayerModel: ObservableObject {
     @Published private(set) var status = "停止中"
     /// 今の番組（`--program` の now の行の「開始-終了 番組名」）
     @Published private(set) var nowProgram: String?
+    /// 今の番組の詳細。パネルに出す
+    @Published private(set) var nowDetail: ProgramDetail?
+    /// 番組詳細のパネルを出すか。次の起動でも使う
+    @Published var showsDetail = UserDefaults.standard.bool(forKey: "showsDetail") {
+        didSet { UserDefaults.standard.set(showsDetail, forKey: "showsDetail") }
+    }
     /// 各チャンネルの今の番組（物理チャンネルごとの「開始-終了 番組名」）。一覧に出す
     @Published private(set) var programs: [String: String] = [:]
     /// 一覧のチャンネルを順に選局して、今の番組を集めている
@@ -340,8 +346,10 @@ final class PlayerModel: ObservableObject {
             guard let self else { return }
             let words = line.split(separator: " ", maxSplits: 2)
             guard words.count == 3, words[1] == "now" else {
-                // 番組の行でなければエラーなどの行
-                self.programError = line
+                // 番組の行（次の番組や詳細の行を含む）でなければエラーなどの行
+                if words.count < 2 || !(words[1].hasPrefix("now") || words[1].hasPrefix("next")) {
+                    self.programError = line
+                }
                 return
             }
             self.programs[channel.channel] = String(words[2])
@@ -439,13 +447,20 @@ final class PlayerModel: ObservableObject {
         let t = coax(["tune", "--ch", channel.channel, "--stats", "--program"])
         t.onLine = { [weak self, weak t] line in
             guard let self, let t, self.tuner === t else { return }
-            // 「時刻 now|next 開始-終了 番組名」は番組の行、「時刻 locked ...」などは受信状態の行、それ以外はエラーなど
+            // 「時刻 now|next 開始-終了 番組名」は番組の行で、そのあとに「時刻 now-text 説明」「時刻 now-item 見出し<TAB>内容」が続く。
+            // 「時刻 locked ...」などは受信状態の行、それ以外はエラーなど
             let words = line.split(separator: " ", maxSplits: 2)
+            let rest = words.count == 3 ? String(words[2]) : ""
             switch words.count == 3 ? words[1] : "" {
             case "now":
-                self.nowProgram = String(words[2])
+                self.nowProgram = rest
                 self.programs[channel.channel] = self.nowProgram
-            case "next": break
+                self.nowDetail = ProgramDetail(program: rest)
+            case "now-text":
+                self.nowDetail?.text = ProgramDetail.unescape(rest)
+            case "now-item":
+                self.nowDetail?.append(item: rest)
+            case "next", "next-text", "next-item": break
             default:
                 if line.range(of: #"^\d\d:\d\d:\d\d "#, options: .regularExpression) != nil {
                     self.reception = line
@@ -601,6 +616,7 @@ final class PlayerModel: ObservableObject {
         playing = nil
         playingChannel = nil
         nowProgram = nil
+        nowDetail = nil
         reception = nil
         oneSegOnly = false
         captionTimer?.invalidate()
@@ -953,5 +969,47 @@ enum DeviceState: Equatable {
         } else {
             self = .missing(error.isEmpty ? "デバイスが見つかりません" : "デバイスが見つかりません: \(error)")
         }
+    }
+}
+
+/// 番組の詳細。coax の `--program` の番組の行と、それに続く説明（-text）と詳しい説明の項目（-item）の行から作る
+struct ProgramDetail: Equatable {
+    /// 「開始-終了 番組名」
+    let program: String
+    var text = ""
+    var items: [Item] = []
+
+    struct Item: Equatable, Identifiable {
+        let id: Int
+        let heading: String
+        let value: String
+    }
+
+    /// 開始-終了
+    var span: String { program.split(separator: " ", maxSplits: 1).first.map(String.init) ?? "" }
+    var title: String { program.split(separator: " ", maxSplits: 1).dropFirst().first.map(String.init) ?? program }
+
+    /// 「見出し<TAB>内容」の行を足す
+    mutating func append(item line: String) {
+        let parts = line.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
+        items.append(Item(id: items.count, heading: Self.unescape(String(parts[0])),
+                          value: parts.count > 1 ? Self.unescape(String(parts[1])) : ""))
+    }
+
+    /// coax が 1 行に収めるために書いた「\n」「\t」「\\」を元に戻す
+    static func unescape(_ text: String) -> String {
+        var result = ""
+        var escaping = false
+        for c in text {
+            if escaping {
+                result.append(c == "n" ? "\n" : c == "t" ? "\t" : c)
+                escaping = false
+            } else if c == "\\" {
+                escaping = true
+            } else {
+                result.append(c)
+            }
+        }
+        return result
     }
 }
