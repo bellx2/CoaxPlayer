@@ -164,6 +164,7 @@ final class PlayerModel: ObservableObject {
             status = "チャンネル一覧がありません。設定（⌘,）でスキャンしてください"
         }
         if config.debug { startDebugLog() }
+        Trace.enabled = config.debug
         if decoderPath != nil { startPCSC() }
     }
 
@@ -274,6 +275,13 @@ final class PlayerModel: ObservableObject {
         }
     }
 
+    /// 一覧の並び（リモコンの番号の順）で、見ているチャンネルの前後へ切り替える。端からは反対の端へ回る
+    func switchChannel(by offset: Int) {
+        guard let current, let index = channels.firstIndex(where: { $0.channel == current.channel }) else { return }
+        let count = channels.count
+        play(channels[((index + offset) % count + count) % count])
+    }
+
     private func selectTyped() {
         let typed = typedNumber
         typedNumber = ""
@@ -290,33 +298,58 @@ final class PlayerModel: ObservableObject {
         refreshing = true
         programFailures = 0
         programError = nil
+        Trace.begin("番組情報を集め始めた")
         fetchProgram(at: 0)
     }
 
-    private func fetchProgram(at index: Int) {
+    /// 1 局ずつ短く選局して集める。番組名を早くそろえるため、まず全局の今の番組だけを集め（.programs）、
+    /// そのあとワンセグのある局をもう一周してプレビューを集める（.previews）。プレビューはワンセグの映像の
+    /// キーフレームを待つので 1 局 1〜3 秒かかり、番組（約 1 秒）と一緒に待つと番組名がそろうのが遅れる
+    private enum RefreshPass { case programs, previews }
+
+    private func fetchProgram(at index: Int, pass: RefreshPass = .programs) {
         guard refreshing else { return }
-        guard index < channels.count else {
+        let targets = pass == .programs ? channels : channels.filter { $0.oneSegServiceID != nil }
+        guard index < targets.count else {
+            if pass == .programs {
+                if programFailures == channels.count {
+                    // 番組が 1 局も取れなかったときは（デバイスが無いなど）、プレビューも取れないので終える
+                    refreshing = false
+                    status = "番組情報を取得できませんでした" + (programError.map { ": \($0)" } ?? "")
+                    return
+                }
+                Trace.mark("番組情報: 番組をすべて集めた")
+                fetchProgram(at: 0, pass: .previews)
+                return
+            }
+            Trace.mark("番組情報: すべて終わった")
             refreshing = false
-            if programFailures == channels.count {
-                status = "番組情報を取得できませんでした" + (programError.map { ": \($0)" } ?? "")
-            } else if programFailures > 0 {
+            if programFailures > 0 {
                 status = "番組情報を更新しました（\(programFailures) 局は取得できませんでした）"
             } else {
                 status = "番組情報を更新しました"
             }
             return
         }
-        let channel = channels[index]
-        status = "番組情報を取得中（\(index + 1)/\(channels.count)）\(channel.name)"
+        let channel = targets[index]
+        Trace.mark("番組情報: \(channel.channel) を選局（\(pass == .programs ? "番組" : "プレビュー")）")
+        status = pass == .programs
+            ? "番組情報を取得中（\(index + 1)/\(targets.count)）\(channel.name)"
+            : "プレビューを取得中（\(index + 1)/\(targets.count)）\(channel.name)"
+        // ワンセグの映像の 1 コマをプレビューにする。ffmpeg を起動できなければ、選局せずに次の局へ
+        let preview = pass == .previews
+            ? channel.oneSegServiceID.flatMap { PreviewGrabber(serviceID: $0, ffmpeg: Self.ffmpeg()) }
+            : nil
+        if pass == .previews && preview == nil {
+            fetchProgram(at: index + 1, pass: pass)
+            return
+        }
         // 止めた直後は coaxd がまだチューナーを持っていて、続く視聴の選局が in use になる。
         // 優先度を下げておき、視聴の選局（既定の 0）がチューナーを奪えるようにする
         let t = coax(["tune", "--ch", channel.channel, "--program", "--priority", "-1"])
-        // ワンセグの映像の 1 コマをプレビューにする。ワンセグが無い局や ffmpeg が無いときは作らない
-        let preview = channel.oneSegServiceID.flatMap { PreviewGrabber(serviceID: $0, ffmpeg: Self.ffmpeg()) }
         programPreview = preview
-        var programDone = false
-        var previewDone = preview == nil
-        // 今の番組とプレビューがそろうか、終わるか、時間切れになったら次の局へ
+        // 番組の周では今の番組が届いたら、プレビューの周ではプレビューが取れたら次の局へ。
+        // 終わったときと時間切れのときも次へ
         let advance = { [weak self, weak t] in
             guard let self, let t, self.programTuner === t else { return }
             self.programTimer?.invalidate()
@@ -324,7 +357,7 @@ final class PlayerModel: ObservableObject {
             self.programPreview = nil
             preview?.stop()
             t.stop()
-            self.fetchProgram(at: index + 1)
+            self.fetchProgram(at: index + 1, pass: pass)
         }
         preview?.onDone = { [weak self] jpeg in
             DispatchQueue.main.async {
@@ -337,8 +370,8 @@ final class PlayerModel: ObservableObject {
                         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
                         try? jpeg.write(to: url)
                     }
-                    previewDone = true
-                    if programDone { advance() }
+                    Trace.mark("番組情報: \(channel.channel) のプレビュー\(jpeg == nil ? "なし" : "")")
+                    advance()
                 }
             }
         }
@@ -347,18 +380,21 @@ final class PlayerModel: ObservableObject {
             let words = line.split(separator: " ", maxSplits: 2)
             guard words.count == 3, words[1] == "now" else {
                 // 番組の行（次の番組や詳細の行を含む）でなければエラーなどの行
-                if words.count < 2 || !(words[1].hasPrefix("now") || words[1].hasPrefix("next")) {
+                if pass == .programs, words.count < 2 || !(words[1].hasPrefix("now") || words[1].hasPrefix("next")) {
                     self.programError = line
                 }
                 return
             }
+            // プレビューの周でも、届いた番組は新しいので反映する
             self.programs[channel.channel] = String(words[2])
-            programDone = true
-            if previewDone { advance() }
+            if pass == .programs {
+                Trace.mark("番組情報: \(channel.channel) の番組")
+                advance()
+            }
         }
         t.onExit = { [weak self, weak t] code in
             // 番組が届く前に異常終了したものを失敗として数える（時間切れで止めたものは数えない）
-            if let self, let t, self.programTuner === t, code != 0 { self.programFailures += 1 }
+            if let self, let t, self.programTuner === t, code != 0, pass == .programs { self.programFailures += 1 }
             advance()
         }
         do {
@@ -379,9 +415,11 @@ final class PlayerModel: ObservableObject {
                 MainActor.assumeIsolated { advance() }
             }
         } catch {
-            programFailures += 1
-            programError = error.localizedDescription
-            fetchProgram(at: index + 1)
+            if pass == .programs {
+                programFailures += 1
+                programError = error.localizedDescription
+            }
+            fetchProgram(at: index + 1, pass: pass)
         }
     }
 
@@ -409,8 +447,11 @@ final class PlayerModel: ObservableObject {
     }
 
     func play(_ channel: Channel) {
+        Trace.begin("選局: \(channel.channel)")
+        videoRetried = nil
         cancelRefresh()
         stop()
+        Trace.mark("前の再生を止めた")
         guard decoderFailed && decoderPath != nil else {
             tune(channel)
             return
@@ -450,6 +491,9 @@ final class PlayerModel: ObservableObject {
             // 「時刻 now|next 開始-終了 番組名」は番組の行で、そのあとに「時刻 now-text 説明」「時刻 now-item 見出し<TAB>内容」が続く。
             // 「時刻 locked ...」などは受信状態の行、それ以外はエラーなど
             let words = line.split(separator: " ", maxSplits: 2)
+            if words.count >= 2, self.reception == nil, words[1] != "now" && !words[1].hasPrefix("now-") && !words[1].hasPrefix("next") {
+                Trace.mark("coax: 最初の受信状態 \(line)")
+            }
             let rest = words.count == 3 ? String(words[2]) : ""
             switch words.count == 3 ? words[1] : "" {
             case "now":
@@ -478,11 +522,13 @@ final class PlayerModel: ObservableObject {
         }
         do {
             var fd = try t.start()
+            Trace.mark("coax を起動した")
             if let path = decoderPath, pcscReady, !decoderFailed {
                 let d = CoaxProcess(executable: URL(fileURLWithPath: path), arguments: [], input: fd,
                                     environment: ["PCSCLITE_CSOCK_NAME": pcscSocket.path])
                 watchDecoder(d)
                 fd = try d.start()
+                Trace.mark("デコーダーを起動した")
                 decoder = d
             }
             guard let tee = StreamTee(source: fd) else {
@@ -508,6 +554,7 @@ final class PlayerModel: ObservableObject {
             status = "選局中..."
             // fdclose:// は mpv が読み終えたら fd を閉じる
             player.load("fdclose://\(tee.mpvFD)", decoded: decoder != nil)
+            watchVideo(channel, tee: tee, frames: player.renderedFrames)
             oneSegOnly = decoder == nil
             startCaptions(tee)
             tee.start()
@@ -573,6 +620,22 @@ final class PlayerModel: ObservableObject {
             let message = "デコーダーが終了したので、ワンセグで再生します（\(code)）: \(last)"
             self.status = message
             self.retune(channel, message: message, attempts: 5)
+        }
+    }
+
+    /// 選局し直したチャンネル。見張りで選び直すのは 1 回だけにする
+    private var videoRetried: String?
+
+    /// 選局してから 5 秒経っても映像が 1 コマも出なければ、1 回だけ選び直す。
+    /// mpv が最初の解析で映像を見つけ損ねると、その再生の間ずっと映像が出ないため（まれに起きる）
+    private func watchVideo(_ channel: Channel, tee: StreamTee, frames: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self, weak tee] in
+            guard let self, let tee, self.tee === tee, self.player.renderedFrames == frames,
+                  self.videoRetried != channel.channel else { return }
+            Trace.mark("映像が出ないので選局し直す")
+            self.play(channel)
+            self.videoRetried = channel.channel
+            self.status = "映像が出なかったので選局し直しました"
         }
     }
 
@@ -938,9 +1001,16 @@ final class PlayerModel: ObservableObject {
                 guard let self else { return }
                 let p = self.player
                 let pos = p.doubleProperty("time-pos").map { String(format: "%.2f", $0) } ?? "-"
+                // 放送からの遅れ。届いた最新の PCR と再生位置の差（PCR は 33 ビットで一周する）
+                var lag = "-"
+                if let pcr = self.tee?.latestPCR, let time = p.doubleProperty("time-pos") {
+                    var d = pcr - time
+                    if d < -47721 { d += 95443.7176888889 }
+                    lag = String(format: "%.2f", d)
+                }
                 let fps = p.doubleProperty("estimated-vf-fps").map { String(format: "%.2f", $0) } ?? "-"
                 let w = p.int64Property("dwidth") ?? 0, h = p.int64Property("dheight") ?? 0
-                let line = "debug: time-pos=\(pos) estimated-vf-fps=\(fps) size=\(w)x\(h) rendered=\(p.renderedFrames) enhanced=\(p.enhancedFrames) luma=\(p.lastLuma) layer=\(Int(p.layer.bounds.width))x\(Int(p.layer.bounds.height)) contents=\(p.layer.contents != nil) gravity=\(p.layer.contentsGravity.rawValue) windows=\(NSApp.windows.filter(\.isVisible).count) tuner-pid=\(self.tuner?.pid ?? 0) caption=\(self.caption.map { "\(Int($0.rect.width))x\(Int($0.rect.height))" } ?? "-") recording=\(self.recording?.lastPathComponent ?? "-") now=\(self.nowProgram ?? "-")\n"
+                let line = "debug: lag=\(lag) time-pos=\(pos) estimated-vf-fps=\(fps) size=\(w)x\(h) rendered=\(p.renderedFrames) enhanced=\(p.enhancedFrames) luma=\(p.lastLuma) layer=\(Int(p.layer.bounds.width))x\(Int(p.layer.bounds.height)) contents=\(p.layer.contents != nil) gravity=\(p.layer.contentsGravity.rawValue) windows=\(NSApp.windows.filter(\.isVisible).count) tuner-pid=\(self.tuner?.pid ?? 0) caption=\(self.caption.map { "\(Int($0.rect.width))x\(Int($0.rect.height))" } ?? "-") recording=\(self.recording?.lastPathComponent ?? "-") now=\(self.nowProgram ?? "-")\n"
                 FileHandle.standardError.write(Data(line.utf8))
             }
         }

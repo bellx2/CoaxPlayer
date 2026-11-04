@@ -20,6 +20,14 @@ final class MPVPlayer {
     private var surfaces: [CVPixelBuffer] = []
     private var surfaceIndex = 0
     private(set) var renderCount = 0
+    /// 読み込んでからまだ 1 コマも描いていない（計測用。renderQueue 上でのみ触る）
+    private var firstFrame = false
+    /// 止めるか読み込んでから、新しい映像のコマが来るまで。その間に描けたコマは前の映像の残りなので、
+    /// 画面に出さず数えもしない（renderQueue 上でのみ触る）
+    private var blanked = false
+    /// 新しいファイルが開かれ、映像の出力が設定し直されるのを待っている。mpv はファイルを開いた直後に
+    /// 前の映像の最後のコマを 1 回描き直し、そのあと新しい映像に合わせて出力を設定し直してから新しいコマを描く
+    private var awaitingReconfig = false
     private var luma = 0
     /// 高精細化の処理（macOS 26 以降の Enhancer）。映像の大きさが変わったら作り直す
     private var enhancer: AnyObject?
@@ -59,6 +67,9 @@ final class MPVPlayer {
             ("rebase-start-time", "no"),
             ("profile", "low-latency"),
             ("cache", "no"),
+            // 音声の出力に渡す前に溜める秒数。low-latency のプロファイルは 0 にするが、受信はまとまって届くので、
+            // 溜めが無いと再生が受信の端に追いついて、ほぼ 1 秒ごとに音が途切れる。プロファイルより後に置く
+            ("audio-buffer", "0.5"),
             ("demuxer-lavf-probe-info", "yes"),
             ("demuxer-lavf-probesize", "200000"),
             ("demuxer-lavf-analyzeduration", "0.5"),
@@ -100,6 +111,11 @@ final class MPVPlayer {
     /// URL（ファイルパスや fdclose://N）を再生する。decoded はデコーダーを通した TS か
     func load(_ url: String, decoded: Bool = false) {
         trackLock.withLock { self.decoded = decoded }
+        renderQueue.async {
+            self.firstFrame = true
+            self.blanked = true
+            self.awaitingReconfig = false
+        }
         // 別の映像になるので、ノイズ除去が前の映像のフレームを参照しないよう作り直す
         renderQueue.async { self.enhancer = nil }
         clear()
@@ -108,6 +124,10 @@ final class MPVPlayer {
 
     func stop() {
         command(["stop"])
+        renderQueue.async {
+            self.blanked = true
+            self.awaitingReconfig = false
+        }
         clear()
     }
 
@@ -201,7 +221,7 @@ final class MPVPlayer {
                 }
             }
         }
-        if r >= 0 && debug && renderCount % 15 == 0, let pixels {
+        if r >= 0 && debug && (renderCount % 15 == 0 || firstFrame), let pixels {
             luma = averageLuma(pixels, width: Int(w), height: Int(h), stride: stride)
         }
         CVPixelBufferUnlockBaseAddress(surface, [])
@@ -209,7 +229,12 @@ final class MPVPlayer {
             log("描画失敗: \(String(cString: mpv_error_string(r)))")
             return
         }
+        guard !blanked else { return }
         renderCount += 1
+        if firstFrame {
+            firstFrame = false
+            Trace.mark("mpv: 最初のコマを描いた（明るさ \(luma)）")
+        }
 
         let shown = enhanced(surface, width: Int(w), height: Int(h)) ?? surface
         guard let ioSurface = CVPixelBufferGetIOSurface(shown)?.takeUnretainedValue() else { return }
@@ -310,6 +335,16 @@ final class MPVPlayer {
                 }
             case MPV_EVENT_FILE_LOADED:
                 if debug { log("file-loaded") }
+                renderQueue.async { if self.blanked { self.awaitingReconfig = true } }
+                Trace.mark("mpv: file-loaded")
+            case MPV_EVENT_VIDEO_RECONFIG:
+                renderQueue.async {
+                    guard self.awaitingReconfig else { return }
+                    self.awaitingReconfig = false
+                    self.blanked = false
+                }
+            case MPV_EVENT_PLAYBACK_RESTART:
+                Trace.mark("mpv: 再生を始めた")
             case MPV_EVENT_AUDIO_RECONFIG:
                 // 音量とミュートはメインスレッドで変えるので、掛け直しもメインスレッドで行う
                 DispatchQueue.main.async { [weak self] in self?.applyAudioLevel() }

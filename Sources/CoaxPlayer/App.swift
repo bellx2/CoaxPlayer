@@ -58,7 +58,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             signalSources.append(src)
         }
 
-        // 数字キー（テンキーも）で選局し、映像のページでは delete で一覧に戻り、上下の矢印で音量を変え、M でミュートを、I で番組詳細を切り替える。
+        // 数字キー（テンキーも）で選局し、映像のページでは delete で一覧に戻り、上下の矢印で音量を、左右の矢印でチャンネルを変え、
+        // M でミュートを、I で番組詳細を切り替える。
         // メインのウィンドウで修飾キーなしのときだけ
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, event.window?.title == "CoaxPlayer",
@@ -76,6 +77,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let handled = MainActor.assumeIsolated {
                     guard self.model.playing != nil else { return false }
                     self.model.volume = min(100, max(0, self.model.volume + step))
+                    return true
+                }
+                return handled ? nil : event
+            }
+            if event.keyCode == 123 || event.keyCode == 124 {  // 左・右の矢印で前・次のチャンネルへ
+                let offset = event.keyCode == 124 ? 1 : -1
+                let handled = MainActor.assumeIsolated {
+                    guard self.model.current != nil else { return false }
+                    self.model.switchChannel(by: offset)
                     return true
                 }
                 return handled ? nil : event
