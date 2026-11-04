@@ -125,6 +125,8 @@ fetch mpv https://github.com/mpv-player/mpv/archive/refs/tags/v0.41.0.tar.gz \
   sed -i '' "s|'audio/out/ao_coreaudio_utils.c')|'audio/out/ao_coreaudio_utils.c', 'osdep/utils-mac.c')|" meson.build &&
   sed -i '' "s|modules: \['CoreMedia', 'AVFoundation'\]|modules: ['CoreMedia', 'AVFoundation', 'Foundation']|" meson.build &&
   grep -q "'osdep/utils-mac.c')" meson.build && grep -q "'AVFoundation', 'Foundation'" meson.build)
+# AVFoundation の音声出力が約 2 秒先読みするのを 0.25 秒に抑える（放送からの遅れと、選局から動き出すまでの待ちが縮む）
+patch -p1 -d "$SRC/mpv" < "$ROOT/patches/mpv-avfoundation-latency.patch"
 meson_install mpv -Dlibmpv=true -Dcplayer=false -Dgpl=false -Dlibavdevice=disabled \
   -Dlua=disabled -Djavascript=disabled -Dlibarchive=disabled -Dlibbluray=disabled \
   -Ddvdnav=disabled -Dcdda=disabled -Duchardet=disabled -Drubberband=disabled -Dzimg=disabled \

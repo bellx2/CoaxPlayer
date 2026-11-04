@@ -1,0 +1,87 @@
+diff --git a/audio/out/ao_avfoundation.m b/audio/out/ao_avfoundation.m
+index 09f3ef0..b165108 100644
+--- a/audio/out/ao_avfoundation.m
++++ b/audio/out/ao_avfoundation.m
+@@ -45,8 +45,17 @@ - (void)handleRestartNotification:(NSNotification*)notification;
+     CMAudioFormatDescriptionRef format_description;
+     AVObserver *observer;
+     int64_t end_time_av;
++    // Bumped by start and stop (on queue), so a delayed request made for an
++    // earlier start does not resume feeding.
++    int64_t generation;
+ };
+ 
++// AVSampleBufferAudioRenderer asks for more as long as it will take it, which
++// is about two seconds. Everything queued is heard that much later, and the
++// video follows the audio clock, so live streams lag by as much. Keep only
++// this much queued instead.
++#define MAX_QUEUED_NS (250 * INT64_C(1000000))
++
+ static int64_t CMTimeGetNanoseconds(CMTime time)
+ {
+     time = CMTimeConvertScale(time, 1000000000, kCMTimeRoundingMethod_Default);
+@@ -140,22 +149,49 @@ static void feed(struct ao *ao)
+     if (sample_buffer) CFRelease(sample_buffer);
+ }
+ 
+-static void start(struct ao *ao)
++static void request_data(struct ao *ao, int64_t generation)
+ {
+     struct priv *p = ao->priv;
+ 
+-    p->end_time_av = -1;
+-    [p->synchronizer setRate:1];
+     [p->renderer requestMediaDataWhenReadyOnQueue:p->queue usingBlock:^{
++        if (p->generation != generation)
++            return;
++        int64_t cur_time_av = CMTimeGetNanoseconds([p->synchronizer currentTime]);
++        int64_t queued = p->end_time_av - cur_time_av;
++        if (p->end_time_av >= 0 && queued > MAX_QUEUED_NS) {
++            // Enough is queued: stop being asked, and ask again once half of
++            // the allowance has been played.
++            [p->renderer stopRequestingMediaData];
++            int64_t wait = queued - MAX_QUEUED_NS / 2;
++            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, wait), p->queue, ^{
++                if (p->generation == generation)
++                    request_data(ao, generation);
++            });
++            return;
++        }
+         feed(ao);
+     }];
+ }
+ 
++static void start(struct ao *ao)
++{
++    struct priv *p = ao->priv;
++
++    __block int64_t generation;
++    dispatch_sync(p->queue, ^{
++        generation = ++p->generation;
++        p->end_time_av = -1;
++    });
++    [p->synchronizer setRate:1];
++    request_data(ao, generation);
++}
++
+ static void stop(struct ao *ao)
+ {
+     struct priv *p = ao->priv;
+ 
+     dispatch_sync(p->queue, ^{
++        p->generation++;
+         [p->renderer stopRequestingMediaData];
+         [p->renderer flush];
+         [p->synchronizer setRate:0];
+@@ -298,8 +334,9 @@ static int init(struct ao *ao)
+     talloc_free(layout);
+     layout = NULL;
+ 
+-    // AVSampleBufferAudioRenderer read ahead aggressively
+-    ao->device_buffer = ao->samplerate * 2;
++    // Matches MAX_QUEUED_NS with some room: mpv fills this much before it
++    // starts playback, so two seconds here also held back every start.
++    ao->device_buffer = ao->samplerate * 3 / 10;
+ 
+     p->observer = [[AVObserver alloc] initWithAO:ao];
+     NSNotificationCenter *center = [NSNotificationCenter defaultCenter];

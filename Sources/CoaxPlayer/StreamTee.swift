@@ -15,6 +15,11 @@ final class StreamTee {
     /// 局ロゴを取り出す。start の前に設定する
     var logos: LogoExtractor?
 
+    /// 計測用: 最後に読んだ PCR（秒）。届いたストリームの「今」で、再生位置との差が放送からの遅れになる
+    var latestPCR: Double? { lock.withLock { pcr } }
+    private var pcr: Double?
+    private var pending: [UInt8] = []
+
     /// 読み終えたとき（coax が終わったとき）に呼ぶ。メインスレッドで呼ぶ
     var onEnd: (() -> Void)?
 
@@ -59,6 +64,7 @@ final class StreamTee {
         while true {
             let count = buffer.withUnsafeMutableBytes { read(source, $0.baseAddress, $0.count) }
             if count <= 0 { break }
+            if Trace.enabled { watchPCR(buffer[0..<count]) }
             captions.feed(buffer[0..<count])
             logos?.feed(buffer[0..<count])
             // mpv が閉じたあとも、録画のために読み続ける
@@ -73,6 +79,26 @@ final class StreamTee {
         close(sink)
         stopRecording()
         DispatchQueue.main.async { [weak self] in self?.onEnd?() }
+    }
+
+    /// 計測用: パケットの PCR を拾う。最初のバイトが届いたことも印にする
+    private func watchPCR(_ data: ArraySlice<UInt8>) {
+        if pcr == nil && pending.isEmpty { Trace.mark("中継: 最初のバイト") }
+        pending.append(contentsOf: data)
+        var at = 0
+        while pending.count - at >= 188 {
+            guard pending[at] == 0x47 else { at += 1; continue }
+            // アダプテーションフィールドがあり、PCR の印が立っている
+            if pending[at + 3] & 0x20 != 0 && pending[at + 4] >= 7 && pending[at + 5] & 0x10 != 0 {
+                let b = pending[(at + 6)...(at + 10)].map(UInt64.init)
+                let base = b[0] << 25 | b[1] << 17 | b[2] << 9 | b[3] << 1 | b[4] >> 7
+                let first = pcr == nil
+                lock.withLock { pcr = Double(base) / 90000 }
+                if first { Trace.mark("中継: 最初の PCR") }
+            }
+            at += 188
+        }
+        pending.removeFirst(at)
     }
 
     /// 全部書けたら true。読み手が閉じていたら false

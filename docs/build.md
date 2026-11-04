@@ -37,6 +37,8 @@ FAKE_TS=/path/to/file.ts swift run CoaxPlayer --coax "$PWD/scripts/fake-coax.sh"
 mpv は Cocoa を外すと、音声出力が使う `osdep/utils-mac.c` がコンパイルされず、Foundation もリンクされない（リンクは通るが、その関数を呼んだ時点で落ちる）。
 そのため `meson.build` を書き換えて足し、最後に未解決の参照（`nm -m` の `dynamically looked up`）が残っていないことを確かめる。
 
+mpv には `patches/mpv-avfoundation-latency.patch` を当てる。AVFoundation の音声出力（`ao_avfoundation.m`）は、AVSampleBufferAudioRenderer が受け取れる限り音を渡すので、約 2 秒ぶんが先に溜まる。mpv は映像を音の時計に合わせるので、放送からの遅れが約 2 秒増え、選局してから動き出すまでも約 2 秒待つ。パッチでは、渡した量が 0.25 秒を超えたら渡すのをやめて、半分を鳴らし終えたころに再開する。mpv が動き出す前に溜める量（`device_buffer`）も 2 秒から 0.3 秒にする。停止のあとに、待っていた再開が走らないよう、開始と停止のたびに番号を進めて見分ける。
+
 GPL の部品を含めないので、同梱するライブラリは LGPL などの条件で配布できる（`coaxd` は GPL-2.0-only なので、同梱するときはその条件に従う）。
 最低対応 OS は `MACOSX_DEPLOYMENT_TARGET`（既定 13.0）で変えられる。
 
