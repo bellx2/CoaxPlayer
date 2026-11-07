@@ -653,7 +653,7 @@ struct SettingsView: View {
                             .textSelection(.enabled)
                     }
                     Button("フォルダーを選ぶ…") { choosePixFolder() }
-                    Text("pixd・pix-ts と firmware/dt295.bin があるフォルダー（pix-userland の配布アーカイブを展開したもの）。チャンネル一覧は coax でスキャンしたものを使う。選局してから映るまで 2〜3 秒かかる")
+                    Text("pixd・pix-ts と firmware/dt295.bin があるフォルダー（pix-userland の配布アーカイブを展開したもの）。チャンネルスキャンも PIX-DT295 で行う（地上 UHF だけ）。選局してから映るまで 2〜3 秒かかる")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

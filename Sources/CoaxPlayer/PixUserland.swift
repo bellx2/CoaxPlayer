@@ -14,6 +14,9 @@ struct PixUserland {
     static let instance = "coaxplayer"
     /// pixd のソケットを置く場所。ソケットのパスの長さに上限（macOS は 103 バイト）があるので、一時ディレクトリの浅いところにする
     static let runtimeDir = FileManager.default.temporaryDirectory.appendingPathComponent("CoaxPlayer-pix")
+    /// pixd を受け持つ CoaxPlayer が flock をかけておくファイル。CoaxPlayer を 2 つ起動したとき、
+    /// あとのものが先のものの pixd を「落ちて残ったもの」と取り違えて止めないようにする
+    static let lockPath = FileManager.default.temporaryDirectory.appendingPathComponent("CoaxPlayer-pix.lock").path
 
     /// 足りないものがあれば、その説明
     var problem: String? {
@@ -36,6 +39,14 @@ struct PixUserland {
         guard let number = Int(channel), (13...62).contains(number) else { return nil }
         return ["--runtime-dir", Self.runtimeDir.path, "--instance", Self.instance,
                 "--receiver", "0", "-c", "T\(number)", "-t", "-", "-o", "-"]
+    }
+
+    /// `coax scan --tune-command` に渡すコマンド。coax が {ch} を物理チャンネルに置き換えて、チャンネルごとに起動する。
+    /// coax は空白で語に分けるので、各語を ' で囲む（パスに空白があってもよいように）
+    var scanCommand: String {
+        let words = [pixTS.path, "--runtime-dir", Self.runtimeDir.path, "--instance", Self.instance,
+                     "--receiver", "0", "-c", "T{ch}", "-t", "-", "-o", "-"]
+        return words.map { "'\($0)'" }.joined(separator: " ")
     }
 
     /// `pixd --list-json` の出力から DT295 の USB の位置を取る。取れなければ理由を返す
