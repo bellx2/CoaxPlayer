@@ -35,7 +35,7 @@ COAX_DIR=../coax ./scripts/bundle.sh     # dist/CoaxPlayer.app を作る（既�
 - coax の stderr の行は UI の情報源になる。`now` の行は今の番組、それ以外は受信状態として表示する
 - 描画は mpv のソフトウェアレンダラで IOSurface 付き CVPixelBuffer に描き、CALayer の contents にする。字幕は mpv に描かせず（`sid=no`）、libaribcaption で別レイヤーに実ピクセル数で描く
 - 設定でチューナーを PIX-DT295 にすると、pix-userland の `pix-ts` の出力を `coax tune --input -` に流す（`PixUserland.swift`、docs/dt295.md）。pixd の起動と終了もアプリが受け持つ
-- 使っている `coax tune --stats/--program/--input` とスキャン結果の局ロゴ情報は、fork（bellx2/coax）の `coaxplayer` ブランチにしか無い。上流の coax では動かない
+- 使っている `coax tune --stats/--program/--input`、`coax scan --tune-command` とスキャン結果の局ロゴ情報は、fork（bellx2/coax）の `coaxplayer` ブランチにしか無い。上流の coax では動かない
 
 ## 関連リポジトリ（../coax と ../libaribb25）
 

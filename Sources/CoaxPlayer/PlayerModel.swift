@@ -156,6 +156,8 @@ final class PlayerModel: ObservableObject {
     private var pixdReady = false
     /// pixd の準備ができるのを待っている選局
     private var pixWaiting: Channel?
+    /// pixd を受け持つ権利（PixUserland.lockPath に flock をかけた fd）。持っていなければ -1
+    private var pixLock: Int32 = -1
     /// coax tune と中継の間に挟むデコーダー
     private var decoder: CoaxProcess?
     /// デコーダーに渡す PC/SC ソケット（coax pcsc）
@@ -571,11 +573,23 @@ final class PlayerModel: ObservableObject {
             failPixWaiting()
             return
         }
+        guard acquirePixLock() else {
+            Trace.mark("PIX: ほかの CoaxPlayer が使用中")
+            device = .missing("ほかの CoaxPlayer が PIX-DT295 を使っています")
+            failPixWaiting()
+            return
+        }
         device = .checking
         Trace.mark("PIX: DT295 を探す")
         DispatchQueue.global().async { [weak self] in
-            // アプリが落ちて残った pixd は DT295 を持ったままなので止める
-            Self.runTool("pkill", ["-f", "pixd .*--instance \(PixUserland.instance) "])
+            // アプリが落ちて残った pixd は DT295 を持ったままなので止める。ロックを取れたので、
+            // 動いている pixd があっても、それを受け持っていた CoaxPlayer はもういない
+            // 止めきるまで待つ。後始末中の pixd が DT295 とソケットを持っているうちに起動すると失敗する
+            let stale = "pixd .*--instance \(PixUserland.instance) "
+            if Self.runTool("pkill", ["-f", stale]) == 0 {
+                for _ in 0..<30 where Self.runTool("pgrep", ["-f", stale]) == 0 { usleep(100_000) }
+                Self.runTool("pkill", ["-KILL", "-f", stale])
+            }
             let list = Process()
             let pipe = Pipe()
             list.executableURL = pix.pixd
@@ -656,6 +670,28 @@ final class PlayerModel: ObservableObject {
         pixd = nil
         pixdReady = false
         p?.stop()
+        releasePixLock()
+    }
+
+    /// pixd を受け持つ権利を取る。flock は持ち主のプロセスが終わると（落ちても）外れる。
+    /// 子プロセスに引き継ぐと、アプリが落ちても pixd が持ち続けてしまうので O_CLOEXEC で開く
+    private func acquirePixLock() -> Bool {
+        if pixLock >= 0 { return true }
+        let fd = open(PixUserland.lockPath, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { return false }
+        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
+            close(fd)
+            return false
+        }
+        pixLock = fd
+        return true
+    }
+
+    private func releasePixLock() {
+        guard pixLock >= 0 else { return }
+        flock(pixLock, LOCK_UN)
+        close(pixLock)
+        pixLock = -1
     }
 
     func play(_ channel: Channel) {
@@ -1152,6 +1188,11 @@ final class PlayerModel: ObservableObject {
             scanStatus = "範囲を選んでください"
             return
         }
+        // DT295 は pix-ts でチャンネルごとに選局するので、pixd が動いている必要がある
+        if usesPix && !pixdReady {
+            scanStatus = "PIX-DT295 の準備ができていません（デバイスの状態を確かめてください）"
+            return
+        }
         cancelRefresh()
         stop()
         let output = URL(fileURLWithPath: config.scanPath)
@@ -1169,6 +1210,12 @@ final class PlayerModel: ObservableObject {
             "--include", "^(\(patterns.joined(separator: "|")))$",
             "--output", output.path,
         ]
+        // DT295 は coax のチューナーではないので、pix-ts を外部コマンドとして選局させる。
+        // ロックが分からず、受信できない局はデータが来ないことで見分けるので、--data-timeout を
+        // 流れ始めるまでの時間（2〜3 秒）より長くする
+        if usesPix, let pix = pixUserland {
+            arguments += ["--data-timeout", "5s", "--tune-command", pix.scanCommand]
+        }
         // 中止したものの続きでなければ、前の進捗を捨てて最初から調べ直す
         if !scanResumable { arguments.append("--restart") }
         let s = coax(arguments)
