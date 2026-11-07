@@ -34,7 +34,8 @@ COAX_DIR=../coax ./scripts/bundle.sh     # dist/CoaxPlayer.app を作る（既�
 - 再生の流れ: `PlayerModel` が `coax tune --ch N --stats --program` を子プロセス（`CoaxProcess`）で起動し（外部デコーダーがあればその stdin につなぐ）、`StreamTee` が出力を読んで `fdclose://` で mpv に渡す。同じ中継で、録画の書き出し、字幕の PES（`CaptionExtractor`）、局ロゴ（`LogoExtractor`）を取り出す。ファイルの再生はこの中継を通らないため、字幕も局ロゴも出ない
 - coax の stderr の行は UI の情報源になる。`now` の行は今の番組、それ以外は受信状態として表示する
 - 描画は mpv のソフトウェアレンダラで IOSurface 付き CVPixelBuffer に描き、CALayer の contents にする。字幕は mpv に描かせず（`sid=no`）、libaribcaption で別レイヤーに実ピクセル数で描く
-- 使っている `coax tune --stats/--program` とスキャン結果の局ロゴ情報は、fork（bellx2/coax）の `coaxplayer` ブランチにしか無い。上流の coax では動かない
+- 設定でチューナーを PIX-DT295 にすると、pix-userland の `pix-ts` の出力を `coax tune --input -` に流す（`PixUserland.swift`、docs/dt295.md）。pixd の起動と終了もアプリが受け持つ
+- 使っている `coax tune --stats/--program/--input` とスキャン結果の局ロゴ情報は、fork（bellx2/coax）の `coaxplayer` ブランチにしか無い。上流の coax では動かない
 
 ## 関連リポジトリ（../coax と ../libaribb25）
 

@@ -11,7 +11,7 @@
 ## 動作環境
 
 - Apple Silicon の Mac、macOS 13 以降
-- coax が対応する USB 接続の ISDB-T チューナー（動作確認は Sony CECH-ZD1 J）
+- coax が対応する USB 接続の ISDB-T チューナー（動作確認は Sony CECH-ZD1 J）、または pix-userland を通した PIX-DT295
 
 ## インストール
 
@@ -44,6 +44,8 @@ Homebrew を使わないときは、[Releases](https://github.com/bellx2/CoaxPla
 
 フルセグを見るには、利用者が用意した外部のデコーダーを設定画面で指定します（[docs/decoder.md](docs/decoder.md)）。デコーダーはこのアプリには含まれません。
 
+ピクセラの PIX-DT295 は、利用者が用意した [pix-userland](https://github.com/Khronos31/pix-userland) を通して使えます。設定画面の「チューナー」で選びます（[docs/dt295.md](docs/dt295.md)）。
+
 ## 既知の制限
 
 - 衛星放送（ISDB-S）には対応していません
@@ -53,6 +55,7 @@ Homebrew を使わないときは、[Releases](https://github.com/bellx2/CoaxPla
 
 - [docs/usage.md](docs/usage.md): 画面の操作、起動引数
 - [docs/decoder.md](docs/decoder.md): 外部デコーダーのつなぎ方
+- [docs/dt295.md](docs/dt295.md): PIX-DT295 を pix-userland で使う
 - [docs/build.md](docs/build.md): ソースからのビルド
 - [docs/architecture.md](docs/architecture.md): 内部の構成
 
