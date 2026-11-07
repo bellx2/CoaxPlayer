@@ -355,7 +355,7 @@ final class PlayerModel: ObservableObject {
                     return
                 }
                 Trace.mark("番組情報: 番組をすべて集めた")
-                // DT295 は 1 局の選局に約 9 秒かかるので、プレビューまでは集めない
+                // DT295 は 1 局の選局に 2〜3 秒（上流の pix-userland では約 9 秒）かかるので、プレビューまでは集めない
                 if !usesPix {
                     fetchProgram(at: 0, pass: .previews)
                     return
@@ -465,8 +465,8 @@ final class PlayerModel: ObservableObject {
                 preview?.finish()
                 close(fd)
             }
-            // DT295 は流れ始めるまでに約 9 秒かかる
-            programTimer = Timer.scheduledTimer(withTimeInterval: usesPix ? 20 : 10, repeats: false) { _ in
+            // DT295 は流れ始めるまでに 2〜3 秒（上流の pix-userland では約 9 秒）かかる
+            programTimer = Timer.scheduledTimer(withTimeInterval: usesPix ? 15 : 10, repeats: false) { _ in
                 MainActor.assumeIsolated { advance() }
             }
         } catch {
@@ -733,6 +733,11 @@ final class PlayerModel: ObservableObject {
             case "next", "next-text", "next-item": break
             default:
                 if line.range(of: #"^\d\d:\d\d:\d\d "#, options: .regularExpression) != nil {
+                    // DT295 は流れ始めるまでの時間が pix-userland の版で大きく違うので、
+                    // 最初の受信状態の行（coax tune --input はデータが届くまで出さない）から映像を見張る
+                    if self.usesPix, self.reception == nil, let tee = self.tee {
+                        self.watchVideo(channel, tee: tee, frames: self.player.renderedFrames)
+                    }
                     self.reception = line
                     if self.status == "選局中..." { self.status = "" }
                 } else {
@@ -783,7 +788,7 @@ final class PlayerModel: ObservableObject {
             status = "選局中..."
             // fdclose:// は mpv が読み終えたら fd を閉じる
             player.load("fdclose://\(tee.mpvFD)", decoded: decoder != nil || usesPix)
-            watchVideo(channel, tee: tee, frames: player.renderedFrames)
+            if !usesPix { watchVideo(channel, tee: tee, frames: player.renderedFrames) }
             oneSegOnly = decoder == nil && !usesPix
             startCaptions(tee)
             tee.start()
@@ -857,11 +862,10 @@ final class PlayerModel: ObservableObject {
     /// 選局し直したチャンネル。見張りで選び直すのは 1 回だけにする
     private var videoRetried: String?
 
-    /// 選局してから 5 秒経っても映像が 1 コマも出なければ、1 回だけ選び直す。
+    /// 選局してから（DT295 では TS が流れ始めてから）5 秒経っても映像が 1 コマも出なければ、1 回だけ選び直す。
     /// mpv が最初の解析で映像を見つけ損ねると、その再生の間ずっと映像が出ないため（まれに起きる）
     private func watchVideo(_ channel: Channel, tee: StreamTee, frames: Int) {
-        // DT295 は流れ始めるまでに約 9 秒かかるので、待つ時間を延ばす
-        DispatchQueue.main.asyncAfter(deadline: .now() + (usesPix ? 20 : 5)) { [weak self, weak tee] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self, weak tee] in
             guard let self, let tee, self.tee === tee, self.player.renderedFrames == frames,
                   self.videoRetried != channel.channel else { return }
             Trace.mark("映像が出ないので選局し直す")
