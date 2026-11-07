@@ -10,7 +10,7 @@ LIB=$ROOT/.deps/prefix/lib
 APP=$ROOT/dist/CoaxPlayer.app
 NAME=CoaxPlayer
 # アプリの版。変えるときは CHANGELOG.md もそろえる（release.sh もここから読む）
-VERSION=1.0.7
+VERSION=1.0.8
 
 cd "$ROOT"
 swift build -c release --product "$NAME"
