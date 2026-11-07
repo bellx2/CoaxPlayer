@@ -4,10 +4,11 @@
 
 - `Sources/CMpv` — libmpv の system library target（`module.modulemap`。ヘッダーとライブラリの場所は `Package.swift` で `.deps/prefix` を指定）
 - `Sources/CAribCaption` — libaribcaption の system library target
-- `Sources/CoaxPlayer/App.swift` — SwiftUI の画面と AppDelegate（終了時の後始末）。最初のページにチャンネル一覧、選ぶと映像のページ（上にボタン、映像とその下のチャンネルと番組の行）。どちらも下に受信状態の 1 行。設定画面（スキャン、外部デコーダー）
+- `Sources/CoaxPlayer/App.swift` — SwiftUI の画面と AppDelegate（終了時の後始末）。最初のページにチャンネル一覧、選ぶと映像のページ（上にボタン、映像とその下のチャンネルと番組の行）。どちらも下に受信状態の 1 行。設定画面（チューナー、スキャン、外部デコーダー）
 - `Sources/CoaxPlayer/PlayerModel.swift` — 起動引数、選局・停止、録画、スキャン、受信状態の保持
 - `Sources/CoaxPlayer/MPVPlayer.swift` — libmpv の初期化、ソフトウェアレンダラでの描画、トラックの選択、イベント処理
 - `Sources/CoaxPlayer/Enhancer.swift` — 高精細化（ノイズ除去と超解像、macOS 26 以降）
+- `Sources/CoaxPlayer/PixUserland.swift` — PIX-DT295 を pix-userland で使うための、pixd と pix-ts の場所と引数、`pixd --list-json` の読み取り（[dt295.md](dt295.md)）
 - `Sources/CoaxPlayer/CoaxProcess.swift` — `coax tune`・`coax scan`・`coax pcsc` とデコーダーの子プロセス。stdout を fd で返し（tune はデコーダーか中継へ）、stderr を 1 行ずつ通知
 - `Sources/CoaxPlayer/StreamTee.swift` — coax の出力を mpv へ中継し、録画中はファイルにも書く。字幕の PES もここで取り出す
 - `Sources/CoaxPlayer/CaptionExtractor.swift` — TS から、再生中の番組の字幕の PES を取り出す
@@ -26,6 +27,8 @@
 2. 出力は `StreamTee` が読んで、パイプ経由で `fdclose://N` として mpv に渡す（mpv が読み終えたら閉じる）。録画中はファイルにも書き、字幕の PES も取り出す
 3. coax の stderr の行を画面下に表示する。`now` の行（`--program`）は今の番組として映像の下の行に出す。`now` の行と、それに続く `now-text`・`now-item` の詳細の行は、番組詳細のパネルにも出す（`next` で始まる次の番組の行は使わない）（詳細の行の `\n`・`\t`・`\\` は元に戻す）。それ以外は受信状態として最新の 1 行をそのまま出す（coax がエラーで終わったときはそのメッセージが残る）
 4. 「停止」・チャンネル切替・ウィンドウを閉じる・Ctrl-C/SIGTERM では、子プロセスへ SIGTERM を送り、3 秒で終わらなければ SIGKILL して終了を待つ
+
+設定画面でチューナーを PIX-DT295 にしたときは、1 の `coax tune --ch N` の代わりに、pix-userland の `pix-ts` の出力を `coax tune --input - --stats --program` に流す。デコーダーは通さない。pixd の起動と止め方、番組集めの違いは [dt295.md](dt295.md) にある。
 
 一覧の今の番組は、チャンネルを順に `coax tune --ch N --program --priority -1` で選局し（視聴の選局がチューナーを奪えるよう、優先度を下げる）、`now` の行が届いたら（10 秒で届かなければあきらめて）次へ進んで集める。TS は使わないが、読まずに閉じると coax が書き込みで終わるので読み捨てる。全局の番組を集め終えてから、ワンセグのある局をもう一周してプレビューを集める。プレビューはワンセグの映像のキーフレームを待つので 1 局 1〜3 秒かかり、番組（約 1 秒）と一緒に待つと番組名がそろうのが遅れるため（12 局で、番組名がそろうまでが 30 秒から 14 秒になった）。
 

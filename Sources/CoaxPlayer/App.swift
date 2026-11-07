@@ -640,6 +640,24 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            Section("チューナー") {
+                Picker("使うチューナー", selection: $model.tunerKind) {
+                    Text("coax").tag(TunerKind.coax)
+                    Text("PIX-DT295（pix-userland）").tag(TunerKind.pix)
+                }
+                if model.tunerKind == .pix {
+                    LabeledContent("pix-userland") {
+                        Text(model.pixFolder.isEmpty ? "未設定" : model.pixFolder)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .textSelection(.enabled)
+                    }
+                    Button("フォルダーを選ぶ…") { choosePixFolder() }
+                    Text("pixd・pix-ts と firmware/dt295.bin があるフォルダー（pix-userland の配布アーカイブを展開したもの）。チャンネル一覧は coax でスキャンしたものを使う。選局してから映るまで約 9 秒かかる")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
             Section("チャンネルスキャン") {
                 ForEach(ScanRange.all.indices, id: \.self) { index in
                     Toggle(ScanRange.all[index].label, isOn: $model.ranges[index])
@@ -702,6 +720,15 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 480)
+    }
+
+    private func choosePixFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        model.pixFolder = url.path
     }
 
     private func chooseDecoder() {

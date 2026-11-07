@@ -57,6 +57,8 @@ final class PlayerModel: ObservableObject {
     /// 一覧のチャンネルを順に選局して、今の番組を集めている
     @Published private(set) var refreshing = false
     private var programTuner: CoaxProcess?
+    /// DT295 で番組を集めるときの pix-ts
+    private var programPixTS: CoaxProcess?
     private var programTimer: Timer?
     /// 取得できなかった局の数と、最後のエラー（デバイスが無いときなどに一覧へ出す）
     private var programFailures = 0
@@ -89,10 +91,28 @@ final class PlayerModel: ObservableObject {
             UserDefaults.standard.set(decoderSetting, forKey: "decoderPath")
             decoderFailed = false
             // 次の選局から使う。カードのソケットがまだ無ければ立てる
-            if decoderPath != nil && pcsc == nil { startPCSC() }
+            if decoderPath != nil && pcsc == nil && !usesPix { startPCSC() }
         }
     }
     static let homebrewDecoderPath = "/opt/homebrew/bin/arib-b25-stream-test"
+    /// 使うチューナー。coax のチューナーか、pix-userland の PIX-DT295 か
+    @Published var tunerKind = TunerKind(rawValue: UserDefaults.standard.string(forKey: "tunerKind") ?? "") ?? .coax {
+        didSet {
+            guard tunerKind != oldValue else { return }
+            UserDefaults.standard.set(tunerKind.rawValue, forKey: "tunerKind")
+            switchTuner()
+        }
+    }
+    /// pix-userland のフォルダー（pixd・pix-ts・firmware/dt295.bin があるところ）。空なら未設定
+    @Published var pixFolder = UserDefaults.standard.string(forKey: "pixFolder") ?? "" {
+        didSet {
+            guard pixFolder != oldValue else { return }
+            UserDefaults.standard.set(pixFolder, forKey: "pixFolder")
+            if usesPix { switchTuner() }
+        }
+    }
+    var usesPix: Bool { tunerKind == .pix }
+    var pixUserland: PixUserland? { pixFolder.isEmpty ? nil : PixUserland(folder: URL(fileURLWithPath: pixFolder)) }
     /// 録画を止めたあとに ffmpeg に渡す引数。空なら TS のまま残す。
     /// {in} は TS のパス、{out} は拡張子を除いたパス、{video}・{audio} は止めた時点で再生していた映像と音声
     @Published var convertArguments = UserDefaults.standard.string(forKey: "convertArguments") ?? "" {
@@ -129,6 +149,13 @@ final class PlayerModel: ObservableObject {
     let config: Config
     let player: MPVPlayer
     private var tuner: CoaxProcess?
+    /// DT295 のとき、coax tune の前段で TS を出す pix-ts
+    private var pixTS: CoaxProcess?
+    /// DT295 を受け持つ pixd。準備ができると pixdReady になる
+    private var pixd: CoaxProcess?
+    private var pixdReady = false
+    /// pixd の準備ができるのを待っている選局
+    private var pixWaiting: Channel?
     /// coax tune と中継の間に挟むデコーダー
     private var decoder: CoaxProcess?
     /// デコーダーに渡す PC/SC ソケット（coax pcsc）
@@ -165,7 +192,7 @@ final class PlayerModel: ObservableObject {
         }
         if config.debug { startDebugLog() }
         Trace.enabled = config.debug
-        if decoderPath != nil { startPCSC() }
+        if decoderPath != nil && !usesPix { startPCSC() }
     }
 
     /// 起動引数でファイルかチャンネルが渡されていれば再生を始める
@@ -186,6 +213,10 @@ final class PlayerModel: ObservableObject {
 
     /// `coax list --tuners` でデバイスを開いて確かめる。見つかれば番組情報を取りに行く
     func checkDevices() {
+        if usesPix {
+            checkPix()
+            return
+        }
         guard deviceChecker == nil else { return }
         // 番組情報の選局中だとデバイスを開けないので止める（見つかれば取り直す）
         cancelRefresh()
@@ -216,6 +247,11 @@ final class PlayerModel: ObservableObject {
     func restartCoax() {
         guard playing == nil, !scanning, deviceChecker == nil else { return }
         cancelRefresh()
+        if usesPix {
+            stopPixd()
+            checkPix()
+            return
+        }
         pcsc?.stop()
         pcsc = nil
         pcscReady = false
@@ -294,7 +330,7 @@ final class PlayerModel: ObservableObject {
 
     /// 一覧のチャンネルを順に短く選局し、今の番組を集める。再生中とスキャン中は何もしない
     func refreshPrograms() {
-        guard playing == nil, !refreshing, !scanning, !channels.isEmpty else { return }
+        guard playing == nil, !refreshing, !scanning, !channels.isEmpty, !usesPix || pixdReady else { return }
         refreshing = true
         programFailures = 0
         programError = nil
@@ -319,7 +355,15 @@ final class PlayerModel: ObservableObject {
                     return
                 }
                 Trace.mark("番組情報: 番組をすべて集めた")
-                fetchProgram(at: 0, pass: .previews)
+                // DT295 は 1 局の選局に約 9 秒かかるので、プレビューまでは集めない
+                if !usesPix {
+                    fetchProgram(at: 0, pass: .previews)
+                    return
+                }
+                refreshing = false
+                status = programFailures > 0
+                    ? "番組情報を更新しました（\(programFailures) 局は取得できませんでした）"
+                    : "番組情報を更新しました"
                 return
             }
             Trace.mark("番組情報: すべて終わった")
@@ -346,7 +390,15 @@ final class PlayerModel: ObservableObject {
         }
         // 止めた直後は coaxd がまだチューナーを持っていて、続く視聴の選局が in use になる。
         // 優先度を下げておき、視聴の選局（既定の 0）がチューナーを奪えるようにする
-        let t = coax(["tune", "--ch", channel.channel, "--program", "--priority", "-1"])
+        let t: CoaxProcess
+        do {
+            (t, programPixTS) = try tuneProcess(channel, coaxOptions: ["--program", "--priority", "-1"])
+        } catch {
+            programFailures += 1
+            programError = (error as? PixError)?.message ?? error.localizedDescription
+            fetchProgram(at: index + 1, pass: pass)
+            return
+        }
         programPreview = preview
         // 番組の周では今の番組が届いたら、プレビューの周ではプレビューが取れたら次の局へ。
         // 終わったときと時間切れのときも次へ
@@ -356,6 +408,8 @@ final class PlayerModel: ObservableObject {
             self.programTuner = nil
             self.programPreview = nil
             preview?.stop()
+            self.programPixTS?.stop()
+            self.programPixTS = nil
             t.stop()
             self.fetchProgram(at: index + 1, pass: pass)
         }
@@ -411,10 +465,13 @@ final class PlayerModel: ObservableObject {
                 preview?.finish()
                 close(fd)
             }
-            programTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: false) { _ in
+            // DT295 は流れ始めるまでに約 9 秒かかる
+            programTimer = Timer.scheduledTimer(withTimeInterval: usesPix ? 20 : 10, repeats: false) { _ in
                 MainActor.assumeIsolated { advance() }
             }
         } catch {
+            programPixTS?.stop()
+            programPixTS = nil
             if pass == .programs {
                 programFailures += 1
                 programError = error.localizedDescription
@@ -427,6 +484,8 @@ final class PlayerModel: ObservableObject {
         guard refreshing else { return }
         refreshing = false
         programTimer?.invalidate()
+        programPixTS?.stop()
+        programPixTS = nil
         programTuner?.stop()
         programTuner = nil
         programPreview?.stop()
@@ -435,15 +494,168 @@ final class PlayerModel: ObservableObject {
 
     /// coax を起動するコマンド。--coax 未指定なら、.app に同梱した coax（実行ファイルと同じ場所）を使い、
     /// それも無ければ PATH 上の coax を env 経由で起動する（env は exec するので pid は coax のもの）
-    private func coax(_ arguments: [String], outputLines: Bool = false) -> CoaxProcess {
+    private func coax(_ arguments: [String], input: Int32? = nil, outputLines: Bool = false) -> CoaxProcess {
         let bundled = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("coax")
         if let path = config.coaxPath {
-            return CoaxProcess(executable: URL(fileURLWithPath: path), arguments: arguments, outputLines: outputLines)
+            return CoaxProcess(executable: URL(fileURLWithPath: path), arguments: arguments, input: input,
+                               outputLines: outputLines)
         } else if let bundled, FileManager.default.isExecutableFile(atPath: bundled.path) {
-            return CoaxProcess(executable: bundled, arguments: arguments, outputLines: outputLines)
+            return CoaxProcess(executable: bundled, arguments: arguments, input: input, outputLines: outputLines)
         }
         return CoaxProcess(executable: URL(fileURLWithPath: "/usr/bin/env"), arguments: ["coax"] + arguments,
-                           outputLines: outputLines)
+                           input: input, outputLines: outputLines)
+    }
+
+    /// 選局する coax tune を作る（まだ起動しない）。DT295 では pix-ts を先に起動し、その出力を
+    /// `coax tune --input -` に流す。そのとき coaxOptions のうち --stats と --program だけを渡す
+    private func tuneProcess(_ channel: Channel, coaxOptions: [String]) throws -> (CoaxProcess, CoaxProcess?) {
+        guard usesPix else {
+            return (coax(["tune", "--ch", channel.channel] + coaxOptions), nil)
+        }
+        guard let pix = pixUserland else { throw PixError("pix-userland のフォルダーを設定してください（⌘,）") }
+        guard pixdReady else { throw PixError("PIX-DT295 の準備ができていません") }
+        guard let arguments = pix.tuneArguments(channel: channel.channel) else {
+            throw PixError("PIX-DT295 は \(channel.channel) を受信できません（地上波 13〜62ch だけ）")
+        }
+        let front = CoaxProcess(executable: pix.pixTS, arguments: arguments)
+        let fd = try front.start()
+        let options = coaxOptions.filter { $0 == "--stats" || $0 == "--program" }
+        return (coax(["tune", "--input", "-"] + options, input: fd), front)
+    }
+
+    /// pix-ts が異常終了したら、最後の行（エラー）を出す。止めたときは先に pixTS を外すので、ここには来ない
+    private func watchPixTS(_ front: CoaxProcess) {
+        var last = ""
+        front.onLine = { [weak self] line in
+            last = line
+            if self?.config.debug == true { FileHandle.standardError.write(Data("pix-ts: \(line)\n".utf8)) }
+        }
+        front.onExit = { [weak self, weak front] code in
+            guard let self, let front, self.pixTS === front else { return }
+            self.pixTS = nil
+            if code != 0 { self.status = "pix-ts が終了しました（\(code)）: \(last)" }
+        }
+    }
+
+    /// 設定でチューナーか pix-userland のフォルダーを変えたとき。再生と番組集めを止め、デバイスを確かめ直す
+    private func switchTuner() {
+        cancelRefresh()
+        stop()
+        stopPixd()
+        if usesPix {
+            pcsc?.stop()
+            pcsc = nil
+            pcscReady = false
+        } else if decoderPath != nil && pcsc == nil {
+            startPCSC()
+        }
+        checkDevices()
+    }
+
+    /// DT295 の pixd が動いていれば番組を集め、動いていなければ起動する。
+    /// `pixd --list-json` で USB の位置を調べてから、その位置を指定して起動する（DT295 はシリアル番号を返さない個体がある）
+    private func checkPix() {
+        if pixdReady {
+            device = .found("PIX-DT295")
+            refreshPrograms()
+            return
+        }
+        guard pixd == nil else { return }
+        guard let pix = pixUserland else {
+            device = .missing("pix-userland のフォルダーを設定してください（⌘,）")
+            failPixWaiting()
+            return
+        }
+        if let problem = pix.problem {
+            device = .missing("pix-userland: \(problem)")
+            failPixWaiting()
+            return
+        }
+        device = .checking
+        Trace.mark("PIX: DT295 を探す")
+        DispatchQueue.global().async { [weak self] in
+            // アプリが落ちて残った pixd は DT295 を持ったままなので止める
+            Self.runTool("pkill", ["-f", "pixd .*--instance \(PixUserland.instance) "])
+            let list = Process()
+            let pipe = Pipe()
+            list.executableURL = pix.pixd
+            list.arguments = ["--list-json"]
+            list.standardOutput = pipe
+            list.standardError = FileHandle.nullDevice
+            var result: Result<String, PixError>
+            do {
+                try list.run()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                list.waitUntilExit()
+                result = PixUserland.port(listJSON: data)
+            } catch {
+                result = .failure(PixError("pixd: \(error.localizedDescription)"))
+            }
+            DispatchQueue.main.async {
+                guard let self, self.usesPix, self.pixd == nil else { return }
+                Trace.mark("PIX: \(result)")
+                switch result {
+                case .success(let port): self.startPixd(pix, port: port)
+                case .failure(let error):
+                    self.device = .missing(error.message)
+                    self.failPixWaiting()
+                }
+            }
+        }
+    }
+
+    private func startPixd(_ pix: PixUserland, port: String) {
+        // pixd は自分だけが読み書きできるディレクトリでないと使わない
+        let fm = FileManager.default
+        try? fm.createDirectory(at: PixUserland.runtimeDir, withIntermediateDirectories: true,
+                                attributes: [.posixPermissions: 0o700])
+        try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: PixUserland.runtimeDir.path)
+        let p = CoaxProcess(executable: pix.pixd, arguments: pix.daemonArguments(port: port), outputLines: true)
+        var last = ""
+        p.onLine = { [weak self, weak p] line in
+            guard let self, let p, self.pixd === p else { return }
+            last = line
+            if self.config.debug { FileHandle.standardError.write(Data("pixd: \(line)\n".utf8)) }
+            // 「pixd ready: model=PIX-DT295 ...」が出たら選局できる
+            guard !self.pixdReady, line.hasPrefix("pixd ready") else { return }
+            Trace.mark("PIX: pixd の準備ができた")
+            self.pixdReady = true
+            self.device = .found("PIX-DT295")
+            if let channel = self.pixWaiting {
+                self.pixWaiting = nil
+                self.play(channel)
+            } else {
+                self.refreshPrograms()
+            }
+        }
+        p.onExit = { [weak self, weak p] code in
+            guard let self, let p, self.pixd === p else { return }
+            self.pixd = nil
+            self.pixdReady = false
+            Trace.mark("PIX: pixd が終了した（\(code)）: \(last)")
+            self.device = .missing("pixd が終了しました（\(code)）: \(last)")
+            self.failPixWaiting()
+        }
+        do {
+            close(try p.start())
+            pixd = p
+        } catch {
+            device = .missing("pixd: \(error.localizedDescription)")
+        }
+    }
+
+    /// pixd を使えないとき、待っていた選局をやめて理由を出す
+    private func failPixWaiting() {
+        guard pixWaiting != nil, case .missing(let reason) = device else { return }
+        pixWaiting = nil
+        status = reason
+    }
+
+    private func stopPixd() {
+        let p = pixd
+        pixd = nil
+        pixdReady = false
+        p?.stop()
     }
 
     func play(_ channel: Channel) {
@@ -452,7 +664,7 @@ final class PlayerModel: ObservableObject {
         cancelRefresh()
         stop()
         Trace.mark("前の再生を止めた")
-        guard decoderFailed && decoderPath != nil else {
+        guard decoderFailed && decoderPath != nil && !usesPix else {
             tune(channel)
             return
         }
@@ -478,14 +690,28 @@ final class PlayerModel: ObservableObject {
     }
 
     private func tune(_ channel: Channel) {
+        // DT295 は pixd の準備ができてから選局する（--ch で起動したときは、まだ pixd を起動していない）
+        if usesPix && !pixdReady {
+            pixWaiting = channel
+            status = "PIX-DT295 の準備中..."
+            checkPix()
+            return
+        }
         // coax pcsc が動いている間は準備を待つ。終わってしまったら、デコーダーを通さずワンセグで再生する
-        if decoderPath != nil && !decoderFailed && pcsc != nil && !pcscReady {
+        if decoderPath != nil && !decoderFailed && pcsc != nil && !pcscReady && !usesPix {
             pcscWaiting = channel
             status = "デコーダーの準備中..."
             return
         }
 
-        let t = coax(["tune", "--ch", channel.channel, "--stats", "--program"])
+        let t: CoaxProcess
+        do {
+            (t, pixTS) = try tuneProcess(channel, coaxOptions: ["--stats", "--program"])
+        } catch {
+            status = (error as? PixError)?.message ?? "pix-ts: \(error.localizedDescription)"
+            return
+        }
+        if let front = pixTS { watchPixTS(front) }
         t.onLine = { [weak self, weak t] line in
             guard let self, let t, self.tuner === t else { return }
             // 「時刻 now|next 開始-終了 番組名」は番組の行で、そのあとに「時刻 now-text 説明」「時刻 now-item 見出し<TAB>内容」が続く。
@@ -523,7 +749,8 @@ final class PlayerModel: ObservableObject {
         do {
             var fd = try t.start()
             Trace.mark("coax を起動した")
-            if let path = decoderPath, pcscReady, !decoderFailed {
+            // DT295 の TS はスクランブルが解けているので、デコーダーを通さない
+            if let path = decoderPath, pcscReady, !decoderFailed, !usesPix {
                 let d = CoaxProcess(executable: URL(fileURLWithPath: path), arguments: [], input: fd,
                                     environment: ["PCSCLITE_CSOCK_NAME": pcscSocket.path])
                 watchDecoder(d)
@@ -533,6 +760,8 @@ final class PlayerModel: ObservableObject {
             }
             guard let tee = StreamTee(source: fd) else {
                 close(fd)
+                pixTS?.stop()
+                pixTS = nil
                 t.stop()
                 decoder?.stop()
                 decoder = nil
@@ -553,12 +782,14 @@ final class PlayerModel: ObservableObject {
             playingChannel = channel.channel
             status = "選局中..."
             // fdclose:// は mpv が読み終えたら fd を閉じる
-            player.load("fdclose://\(tee.mpvFD)", decoded: decoder != nil)
+            player.load("fdclose://\(tee.mpvFD)", decoded: decoder != nil || usesPix)
             watchVideo(channel, tee: tee, frames: player.renderedFrames)
-            oneSegOnly = decoder == nil
+            oneSegOnly = decoder == nil && !usesPix
             startCaptions(tee)
             tee.start()
         } catch {
+            pixTS?.stop()
+            pixTS = nil
             status = "coax: \(error.localizedDescription)"
         }
     }
@@ -629,7 +860,8 @@ final class PlayerModel: ObservableObject {
     /// 選局してから 5 秒経っても映像が 1 コマも出なければ、1 回だけ選び直す。
     /// mpv が最初の解析で映像を見つけ損ねると、その再生の間ずっと映像が出ないため（まれに起きる）
     private func watchVideo(_ channel: Channel, tee: StreamTee, frames: Int) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self, weak tee] in
+        // DT295 は流れ始めるまでに約 9 秒かかるので、待つ時間を延ばす
+        DispatchQueue.main.asyncAfter(deadline: .now() + (usesPix ? 20 : 5)) { [weak self, weak tee] in
             guard let self, let tee, self.tee === tee, self.player.renderedFrames == frames,
                   self.videoRetried != channel.channel else { return }
             Trace.mark("映像が出ないので選局し直す")
@@ -666,12 +898,16 @@ final class PlayerModel: ObservableObject {
 
     func stop() {
         finishRecording()
-        // 先に子プロセスを止めてチューナーを解放する。中継は coax が終わると自分で閉じる
+        // 先に子プロセスを止めてチューナーを解放する。中継は coax が終わると自分で閉じる。
+        // DT295 は pix-ts を先に止める（coax tune --input は入力が終わると自分で終わる）
+        pixTS?.stop()
+        pixTS = nil
         tuner?.stop()
         tuner = nil
         decoder?.stop()
         decoder = nil
         pcscWaiting = nil
+        pixWaiting = nil
         cardChecking = nil
         tee = nil
         current = nil
@@ -982,12 +1218,15 @@ final class PlayerModel: ObservableObject {
         cancelRefresh()
         debugTimer?.invalidate()
         finishRecording()
+        pixTS?.stop()
+        pixTS = nil
         tuner?.stop()
         tuner = nil
         decoder?.stop()
         decoder = nil
         pcsc?.stop()
         pcsc = nil
+        stopPixd()
         scanner?.stop()
         scanner = nil
         deviceChecker?.stop()
@@ -1015,6 +1254,12 @@ final class PlayerModel: ObservableObject {
             }
         }
     }
+}
+
+/// 使うチューナー。coax のチューナーか、pix-userland の PIX-DT295 か
+enum TunerKind: String {
+    case coax
+    case pix
 }
 
 /// チューナーのデバイスの状態
