@@ -9,8 +9,6 @@ struct Channel: Identifiable {
     let remoteKey: Int?
     /// 局ロゴを CDT で送っているときの、ロゴの在りか（ダウンロードデータ識別とロゴ識別）
     var logoSource: (downloadDataID: Int, logoID: Int)? = nil
-    /// ワンセグの番組番号（部分受信のサービス）。一覧のプレビューに使う
-    var oneSegServiceID: Int? = nil
     /// 最初の番組（局名を取るサービス）の番組番号。3 桁番号に使う
     var serviceID: Int? = nil
 
@@ -73,9 +71,8 @@ enum ScanFile {
             let logoSource = logoInfo?["logo_transmission_type"] as? Int == 1
                 ? (downloadDataID: logoInfo?["download_data_id"] as? Int ?? 0, logoID: logoInfo?["logo_id"] as? Int ?? 0)
                 : nil
-            let oneSeg = services?.first { $0["partial_reception"] as? Bool == true }?["service_id"] as? Int
             return Channel(channel: channel, name: name, remoteKey: remoteKey, logoSource: logoSource,
-                           oneSegServiceID: oneSeg, serviceID: services?.first?["service_id"] as? Int)
+                           serviceID: services?.first?["service_id"] as? Int)
         }
         // リモコンの番号の順に並べる。番号の無いものは、スキャンした順のまま後ろへ
         return channels.enumerated().sorted {

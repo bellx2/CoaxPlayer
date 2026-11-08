@@ -29,7 +29,7 @@ FAKE_TS=/path/to/file.ts swift run CoaxPlayer --coax "$PWD/scripts/fake-coax.sh"
 
 次のものを、公式の配布元から取得して SHA-256 を照合し、`.deps/prefix` にビルドする。Homebrew のものは使わない。
 
-- FFmpeg 9.0.2。MPEG-TS、H.264、MPEG-2 映像、AAC と VideoToolbox のみ。録画の変換のために ffmpeg コマンド、MP4 の書き出し、AAC のエンコーダーも。一覧のプレビューのために rawvideo の書き出しも
+- FFmpeg 9.0.2。MPEG-TS、H.264、MPEG-2 映像、AAC と VideoToolbox のみ。録画の変換のために ffmpeg コマンド、MP4 の書き出し、AAC のエンコーダーも。rawvideo の書き出しも（一覧のプレビューに使っていたもので、今は使っていない）
 - libaribcaption 1.1.2（字幕の解読と描画。CoreText で描く）
 - libplacebo、libass ほか
 - mpv 0.41.0（libmpv のみ、`-Dgpl=false`）
@@ -45,7 +45,7 @@ GPL の部品を含めないので、同梱するライブラリは LGPL など�
 ## bundle.sh
 
 - 参照しているライブラリを `.deps` からたどって `Contents/Frameworks` に集め、参照先を `@rpath` に書き換える
-- `COAX_DIR` を渡すと、coax と coaxd を `Contents/MacOS` に入れる（coax は同じ場所の coaxd を起動する）。録画の変換と一覧のプレビューに使う ffmpeg は常に入れる
+- `COAX_DIR` を渡すと、coax と coaxd を `Contents/MacOS` に入れる（coax は同じ場所の coaxd を起動する）。録画の変換に使う ffmpeg は常に入れる
 - `PIX_DIR`（pix-userland のリポジトリ）を渡すと、`tools/build-portable.sh native` で作った `build/native` の pixd と pix-ts を `Contents/MacOS` に入れる（PIX-DT295 用）。ファームウェアの `dt295.bin` は再配布が制限されるので入れない
 - 同梱するライブラリ、coax、pix-userland のライセンスの全文を `Contents/Resources/licenses/` に入れる
 - アイコン `Resources/AppIcon.icns` を入れる。アイコンは `swift scripts/make-icon.swift` で描き直せる（CoreGraphics で描き、`sips` と `iconutil` で .icns にする）
