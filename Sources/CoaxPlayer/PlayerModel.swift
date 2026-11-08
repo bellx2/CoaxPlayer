@@ -95,16 +95,16 @@ final class PlayerModel: ObservableObject {
             switchTuner()
         }
     }
-    /// pix-userland のフォルダー（pixd・pix-ts・firmware/dt295.bin があるところ）。空なら未設定
-    @Published var pixFolder = UserDefaults.standard.string(forKey: "pixFolder") ?? "" {
+    /// DT295 のファームウェア（dt295.bin）のパス。空なら未設定
+    @Published var pixFirmware = UserDefaults.standard.string(forKey: "pixFirmware") ?? "" {
         didSet {
-            guard pixFolder != oldValue else { return }
-            UserDefaults.standard.set(pixFolder, forKey: "pixFolder")
+            guard pixFirmware != oldValue else { return }
+            UserDefaults.standard.set(pixFirmware, forKey: "pixFirmware")
             if usesPix { switchTuner() }
         }
     }
     var usesPix: Bool { tunerKind == .pix }
-    var pixUserland: PixUserland? { pixFolder.isEmpty ? nil : PixUserland(folder: URL(fileURLWithPath: pixFolder)) }
+    var pixUserland: PixUserland? { pixFirmware.isEmpty ? nil : PixUserland(firmware: URL(fileURLWithPath: pixFirmware)) }
     /// 録画を止めたあとに ffmpeg に渡す引数。空なら TS のまま残す。
     /// {in} は TS のパス、{out} は拡張子を除いたパス、{video}・{audio} は止めた時点で再生していた映像と音声
     @Published var convertArguments = UserDefaults.standard.string(forKey: "convertArguments") ?? "" {
@@ -338,7 +338,7 @@ final class PlayerModel: ObservableObject {
         guard usesPix else {
             return (coax(["tune", "--ch", channel.channel] + coaxOptions), nil)
         }
-        guard let pix = pixUserland else { throw PixError("pix-userland のフォルダーを設定してください（⌘,）") }
+        guard let pix = pixUserland else { throw PixError("PIX-DT295 のファームウェア（dt295.bin）を設定してください（⌘,）") }
         guard pixdReady else { throw PixError("PIX-DT295 の準備ができていません") }
         guard let arguments = pix.tuneArguments(channel: channel.channel) else {
             throw PixError("PIX-DT295 は \(channel.channel) を受信できません（地上波 13〜62ch だけ）")
@@ -363,7 +363,7 @@ final class PlayerModel: ObservableObject {
         }
     }
 
-    /// 設定でチューナーか pix-userland のフォルダーを変えたとき。再生を止め、デバイスを確かめ直す
+    /// 設定でチューナーかファームウェアを変えたとき。再生を止め、デバイスを確かめ直す
     private func switchTuner() {
         stop()
         stopPixd()
@@ -387,12 +387,12 @@ final class PlayerModel: ObservableObject {
         }
         guard pixd == nil else { return }
         guard let pix = pixUserland else {
-            device = .missing("pix-userland のフォルダーを設定してください（⌘,）")
+            device = .missing("PIX-DT295 のファームウェア（dt295.bin）を設定してください（⌘,）")
             failPixWaiting()
             return
         }
         if let problem = pix.problem {
-            device = .missing("pix-userland: \(problem)")
+            device = .missing("PIX-DT295: \(problem)")
             failPixWaiting()
             return
         }

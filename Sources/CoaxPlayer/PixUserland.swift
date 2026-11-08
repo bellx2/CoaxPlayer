@@ -1,14 +1,24 @@
 import Foundation
 
 /// PIX-DT295 を pix-userland（https://github.com/Khronos31/pix-userland）の pixd と pix-ts で使う。
-/// 利用者が用意したフォルダー（配布アーカイブを展開したもの）に pixd・pix-ts・firmware/dt295.bin がある。
-/// ファームウェアはメーカー由来で再配布が制限されるので、.app には同梱しない
+/// pixd と pix-ts は .app に同梱する（Contents/MacOS）。ファームウェアの dt295.bin はメーカー由来で
+/// 再配布が制限されるので同梱せず、利用者が用意したものを設定で指定する
 struct PixUserland {
-    let folder: URL
+    let firmware: URL
+    let pixd: URL
+    let pixTS: URL
 
-    var pixd: URL { folder.appendingPathComponent("pixd") }
-    var pixTS: URL { folder.appendingPathComponent("pix-ts") }
-    var firmware: URL { folder.appendingPathComponent("firmware/dt295.bin") }
+    /// 同梱したものが無ければ（開発中）、配布アーカイブの並び（<フォルダー>/firmware/dt295.bin の <フォルダー>）から探す
+    init(firmware: URL) {
+        self.firmware = firmware
+        var folder = firmware.deletingLastPathComponent().deletingLastPathComponent()
+        if let bundled = Bundle.main.executableURL?.deletingLastPathComponent(),
+           FileManager.default.isExecutableFile(atPath: bundled.appendingPathComponent("pixd").path) {
+            folder = bundled
+        }
+        pixd = folder.appendingPathComponent("pixd")
+        pixTS = folder.appendingPathComponent("pix-ts")
+    }
 
     /// pixd の名前。前回アプリが落ちて残った pixd を探すのにも使う
     static let instance = "coaxplayer"
@@ -24,7 +34,7 @@ struct PixUserland {
         for url in [pixd, pixTS] where !fm.isExecutableFile(atPath: url.path) {
             return "\(url.lastPathComponent) がありません"
         }
-        if !fm.fileExists(atPath: firmware.path) { return "firmware/dt295.bin がありません" }
+        if !fm.fileExists(atPath: firmware.path) { return "\(firmware.path) がありません" }
         return nil
     }
 

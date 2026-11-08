@@ -60,6 +60,27 @@ coax と coaxd について
   coax の NOTICE は、.app の Contents/Resources/licenses/coax/ に入れている。
 
 --------------------------------------------------------------------------------
+pixd と pix-ts について
+
+PIX-DT295 を使うために、pix-userland の pixd（デーモン）と pix-ts（TS を受け取る
+クライアント）を同梱している。DT295 のファームウェア（dt295.bin）はメーカー由来の
+データを含み、再配布が制限されているので同梱しない。
+
+  作者      Khronos31
+  上流      https://github.com/Khronos31/pix-userland
+  同梱する版  上流の main に、DT295 の選局を速くする変更（USB 転送を 8 KiB × 64 本に
+            する）と macOS でのビルドの修正を足した改変版。bellx2/pix-userland の
+            main で、CoaxPlayer の版ごとに coaxplayer-v<版> のタグを付けている。
+  ソース    https://github.com/bellx2/pix-userland/tree/coaxplayer-v<版>
+
+  ライセンス
+    pix-userland の自作部分は GPL-2.0-or-later。静的リンクしている dtv-userland-core
+    には GPL-2.0-only の部分があるので、pixd と pix-ts は全体として GPL-2.0 の条件で
+    配布する。libusb 1.0.30（LGPL-2.1-or-later）を静的リンクしている。
+  詳しくは pix-userland の THIRD_PARTY_NOTICES.md にある。ライセンスの全文と通知は、
+  .app の Contents/Resources/licenses/pix-userland/ に入れている。
+
+--------------------------------------------------------------------------------
 LGPL のライブラリについて
 
 LGPL のライブラリは改変していない（mpv だけは、Cocoa を外したときに足りなく

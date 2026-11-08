@@ -2,6 +2,8 @@
 # dist/CoaxPlayer.app を作る。libmpv と依存ライブラリを Contents/Frameworks に入れ、
 # 参照先を @rpath に書き換えて、Homebrew などが無い Mac でも動くようにする。
 # COAX_DIR を指定すると、そこにある coax と coaxd も同梱する。
+# PIX_DIR（pix-userland のリポジトリ）を指定すると、tools/build-portable.sh で作った build/native の
+# pixd と pix-ts も同梱する（PIX-DT295 用。ファームウェアの dt295.bin は再配布が制限されるので入れない）。
 # SIGN_IDENTITY を指定すると、その証明書で署名する（配布用。hardened runtime を有効にする）。省略時はアドホック署名。
 set -euo pipefail
 
@@ -29,6 +31,9 @@ if [ -n "${COAX_DIR:-}" ]; then
   # coax は同じ場所にある coaxd を起動する
   cp "$COAX_DIR/coax" "$COAX_DIR/coaxd" "$APP/Contents/MacOS/"
 fi
+if [ -n "${PIX_DIR:-}" ]; then
+  cp "$PIX_DIR/build/native/pixd" "$PIX_DIR/build/native/pix-ts" "$APP/Contents/MacOS/"
+fi
 
 # ライセンスの全文を Contents/Resources/licenses に入れる（LGPL のライブラリを配るときの条件）
 LICENSES=$APP/Contents/Resources/licenses
@@ -53,6 +58,10 @@ add_license fast_float "$SRC"/fast_float/LICENSE-*
 add_license vulkan-headers "$SRC/vulkan-headers/LICENSE.md" "$SRC"/vulkan-headers/LICENSES/*
 if [ -n "${COAX_DIR:-}" ]; then
   add_license coax "$COAX_DIR/NOTICE" "$COAX_DIR/COPYING" "$COAX_DIR/LICENSE-APACHE"
+fi
+if [ -n "${PIX_DIR:-}" ]; then
+  add_license pix-userland "$PIX_DIR/LICENSE" "$PIX_DIR/THIRD_PARTY_NOTICES.md" "$PIX_DIR/licenses/GPL-2.0.txt" \
+    "$PIX_DIR/build/native/COPYING.libusb" "$PIX_DIR"/build/native/licenses/*
 fi
 
 cat > "$APP/Contents/Info.plist" <<EOF
@@ -121,8 +130,10 @@ for exe in "$APP"/Contents/MacOS/*; do
 done
 sign "$APP"
 
-# 外部への参照が残っていないことを確かめる（ファイル名の行は除く）
-if otool -L "$APP"/Contents/MacOS/$NAME "$APP"/Contents/MacOS/ffmpeg "$APP"/Contents/Frameworks/*.dylib | grep -v ":$" | grep -E "/opt/homebrew|/usr/local|$ROOT"; then
+# 外部への参照が残っていないことを確かめる（ファイル名の行は除く）。pixd と pix-ts は libusb を静的リンクしている
+pix=()
+[ -z "${PIX_DIR:-}" ] || pix=("$APP/Contents/MacOS/pixd" "$APP/Contents/MacOS/pix-ts")
+if otool -L "$APP"/Contents/MacOS/$NAME "$APP"/Contents/MacOS/ffmpeg ${pix[@]+"${pix[@]}"} "$APP"/Contents/Frameworks/*.dylib | grep -v ":$" | grep -E "/opt/homebrew|/usr/local|$ROOT"; then
   echo "外部のライブラリへの参照が残っています" >&2
   exit 1
 fi
