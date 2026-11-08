@@ -15,7 +15,7 @@ LIB_REAL=$(cd "$LIB" && pwd -P)
 APP=$ROOT/dist/CoaxPlayer.app
 NAME=CoaxPlayer
 # アプリの版。変えるときは CHANGELOG.md もそろえる（release.sh もここから読む）
-VERSION=1.1.0
+VERSION=1.1.1
 
 cd "$ROOT"
 swift build -c release --product "$NAME"
