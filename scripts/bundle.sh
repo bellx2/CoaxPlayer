@@ -9,6 +9,9 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 LIB=$ROOT/.deps/prefix/lib
+# .deps がリンク（git worktree で共有するときなど）だと、実行ファイルにはリンク先の実際のパスが記録される。
+# どちらで記録されていても書き換えられるよう、実際のパスも持っておく
+LIB_REAL=$(cd "$LIB" && pwd -P)
 APP=$ROOT/dist/CoaxPlayer.app
 NAME=CoaxPlayer
 # アプリの版。変えるときは CHANGELOG.md もそろえる（release.sh もここから読む）
@@ -92,7 +95,7 @@ while [ ${#queue[@]} -gt 0 ]; do
   for dep in $(otool -L "$file" | awk 'NR>1 {print $1}'); do
     base=$(basename "$dep")
     case "$dep" in
-      "$LIB"/* | @rpath/*) ;;
+      "$LIB"/* | "$LIB_REAL"/* | @rpath/*) ;;
       *) continue ;;
     esac
     [ -f "$LIB/$base" ] || continue
@@ -108,8 +111,12 @@ while [ ${#queue[@]} -gt 0 ]; do
 done
 
 # 開発用の .deps への rpath は配布物に要らない
-install_name_tool -delete_rpath "$LIB" "$APP/Contents/MacOS/$NAME" 2>/dev/null || true
-install_name_tool -delete_rpath "$LIB" "$APP/Contents/MacOS/ffmpeg" 2>/dev/null || true
+# FFmpeg のライブラリも、ビルドしたときの .deps を rpath に持っている
+for file in "$APP/Contents/MacOS/$NAME" "$APP/Contents/MacOS/ffmpeg" "$APP"/Contents/Frameworks/*.dylib; do
+  for rpath in "$LIB" "$LIB_REAL"; do
+    install_name_tool -delete_rpath "$rpath" "$file" 2>/dev/null || true
+  done
+done
 install_name_tool -add_rpath @executable_path/../Frameworks "$APP/Contents/MacOS/ffmpeg"
 for lib in "$APP"/Contents/Frameworks/*.dylib; do
   install_name_tool -add_rpath @loader_path "$lib" 2>/dev/null || true
@@ -130,11 +137,19 @@ for exe in "$APP"/Contents/MacOS/*; do
 done
 sign "$APP"
 
-# 外部への参照が残っていないことを確かめる（ファイル名の行は除く）。pixd と pix-ts は libusb を静的リンクしている
+# 外部への参照が残っていないことを確かめる（ファイル名の行は除く）。pixd と pix-ts は libusb を静的リンクしている。
+# 置き場所で探すと、リンク先のような思わぬ場所を見落とすので、OS のもの（/System、/usr/lib）と @ で始まる相対の参照以外を残りとみなす。
+# rpath は、開発用の場所（ホームの下と Homebrew）を指すものが無いことを確かめる（Swift の標準の rpath は残る）
 pix=()
 [ -z "${PIX_DIR:-}" ] || pix=("$APP/Contents/MacOS/pixd" "$APP/Contents/MacOS/pix-ts")
-if otool -L "$APP"/Contents/MacOS/$NAME "$APP"/Contents/MacOS/ffmpeg ${pix[@]+"${pix[@]}"} "$APP"/Contents/Frameworks/*.dylib | grep -v ":$" | grep -E "/opt/homebrew|/usr/local|$ROOT"; then
+binaries=("$APP"/Contents/MacOS/* "$APP"/Contents/Frameworks/*.dylib)
+if otool -L "$APP"/Contents/MacOS/$NAME "$APP"/Contents/MacOS/ffmpeg ${pix[@]+"${pix[@]}"} "$APP"/Contents/Frameworks/*.dylib \
+    | grep -v ":$" | awk '{print $1}' | grep -vE '^(/System/|/usr/lib/|@rpath/|@executable_path/|@loader_path/)'; then
   echo "外部のライブラリへの参照が残っています" >&2
+  exit 1
+fi
+if otool -l "${binaries[@]}" | awk '/LC_RPATH/ {getline; getline; print $2}' | grep -E "^($HOME|/Users/|/opt/homebrew|/usr/local)"; then
+  echo "開発用の場所を指す rpath が残っています" >&2
   exit 1
 fi
 du -sh "$APP"
