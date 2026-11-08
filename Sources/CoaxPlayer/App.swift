@@ -58,20 +58,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             signalSources.append(src)
         }
 
-        // 数字キー（テンキーも）で選局し、映像のページでは delete で一覧に戻り、上下の矢印で音量を、左右の矢印でチャンネルを変え、
-        // M でミュートを、I で番組詳細を切り替える。
+        // 数字キー（テンキーも）で選局し、上下の矢印で音量を、左右の矢印でチャンネルを変え、
+        // M でミュートを、I で番組詳細を、G で番組表を切り替える。
         // メインのウィンドウで修飾キーなしのときだけ
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, event.window?.title == "CoaxPlayer",
                   event.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return event }
-            if event.keyCode == 51 {  // delete
-                let handled = MainActor.assumeIsolated {
-                    guard self.model.playing != nil else { return false }
-                    self.model.backToList()
-                    return true
-                }
-                return handled ? nil : event
-            }
             if event.keyCode == 126 || event.keyCode == 125 {  // 上・下の矢印で音量を 5 ずつ変える
                 let step: Double = event.keyCode == 126 ? 5 : -5
                 let handled = MainActor.assumeIsolated {
@@ -107,6 +99,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 return handled ? nil : event
             }
+            if key.lowercased() == "g" {
+                let handled = MainActor.assumeIsolated {
+                    guard !self.model.channels.isEmpty else { return false }
+                    self.model.showsGuide.toggle()
+                    return true
+                }
+                return handled ? nil : event
+            }
             guard let digit = key.first, digit.isASCII, digit.isNumber else { return event }
             MainActor.assumeIsolated { self.model.typeDigit(digit) }
             return nil
@@ -128,7 +128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 // coax-gpui と同じ配色
-private extension Color {
+extension Color {
     init(hex: UInt32) {
         self.init(
             red: Double(hex >> 16 & 0xff) / 255,
@@ -142,19 +142,19 @@ private extension Color {
     static let placeholder = Color(hex: 0x808080)
     static let logoPlaceholder = Color(hex: 0x4a4a4a)
     static let recording = Color(hex: 0xb03030)
+    /// 番組表の放送中の番組
+    static let onAir = Color(hex: 0x23394d)
+    /// 番組表で、見ている局の局名
+    static let watching = Color(hex: 0x4a90d9)
 }
 
-/// 1 ページ目はチャンネル一覧、選ぶと映像のページに切り替わる。下に受信状態の行
+/// 視聴画面だけの 1 ページ。下に受信状態の行
 struct ContentView: View {
     @ObservedObject var model: PlayerModel
 
     var body: some View {
         VStack(spacing: 0) {
-            if model.playing == nil {
-                ChannelListPage(model: model)
-            } else {
-                PlayerPage(model: model)
-            }
+            PlayerPage(model: model)
             // 受信状態などの行
             // 受信状態の詳細は、設定画面で選んだときだけ出す
             Text(model.showsReception && model.playing != nil ? model.reception ?? model.status : model.status)
@@ -170,57 +170,6 @@ struct ContentView: View {
         .foregroundStyle(Color.text)
         .background(Color.black)
         .frame(minWidth: 480, minHeight: 300)
-    }
-}
-
-/// チャンネル一覧。番号、局ロゴ（受け取ったことがあれば）、局名、今の番組のカードを 2 列に並べる
-struct ChannelListPage: View {
-    @ObservedObject var model: PlayerModel
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                DeviceStatusView(device: model.device)
-                IconButton(symbol: "arrow.clockwise", help: "デバイスを再スキャン", active: false) {
-                    model.checkDevices()
-                }
-                IconButton(symbol: "power", help: "coax を再起動", active: false) {
-                    model.restartCoax()
-                }
-                Spacer()
-                if !model.channels.isEmpty {
-                    IconButton(symbol: "arrow.triangle.2.circlepath", help: model.refreshing ? "番組情報を取得中…" : "番組情報を更新",
-                               active: model.refreshing, spinning: model.refreshing) {
-                        model.refreshPrograms()
-                    }
-                }
-            }
-            .disabled(model.device == .checking || model.scanning)
-            .padding(.horizontal, 16)
-            .padding(.top, 12)
-            if model.channels.isEmpty {
-                // 一覧が無いときは、設定画面でスキャンしてもらう
-                VStack(spacing: 12) {
-                    Text("チャンネル一覧がありません")
-                        .foregroundStyle(Color.placeholder)
-                    OpenSettingsButton(label: "設定を開いてスキャン")
-                        .fixedSize()
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollView {
-                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
-                        ForEach(model.channels) { channel in
-                            ChannelCard(channel: channel, logo: model.logos[channel.channel],
-                                        preview: model.previews[channel.channel],
-                                        previewStale: model.stalePreviews.contains(channel.channel),
-                                        program: model.programs[channel.channel]) { model.play(channel) }
-                        }
-                    }
-                    .padding(16)
-                }
-            }
-        }
     }
 }
 
@@ -286,78 +235,27 @@ struct StationLogo: View {
     }
 }
 
-struct ChannelCard: View {
-    let channel: Channel
-    let logo: NSImage?
-    /// 番組情報を取ったときの映像の 1 コマ。まだ無ければ nil
-    let preview: NSImage?
-    /// プレビューが前に保存したもので、まだ取り直していない
-    let previewStale: Bool
-    /// 今の番組（「開始-終了 番組名」）。まだ取っていなければ nil
-    let program: String?
-    let action: () -> Void
-    @State private var hovering = false
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            // リモコンの番号を四角で囲み、その下に 3 桁番号を出す
-            VStack(spacing: 5) {
-                Text(channel.remoteKey.map(String.init) ?? "-")
-                    .font(.system(size: 20, weight: .semibold))
-                    .monospacedDigit()
-                    .frame(width: 40, height: 34)
-                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.text, lineWidth: 1.5))
-                Text(channel.threeDigitNumber ?? " ")
-                    .font(.system(size: 11))
-                    .monospacedDigit()
-                    .foregroundStyle(Color.placeholder)
-            }
-            // プレビューがまだ無い局も、局名の位置をそろえる
-            Group {
-                if let preview {
-                    Image(nsImage: preview).resizable().interpolation(.high)
-                        .opacity(previewStale ? 0.4 : 1)
-                } else {
-                    Color.logoPlaceholder
-                }
-            }
-            .frame(width: 112, height: 63)
-            .clipShape(RoundedRectangle(cornerRadius: 4))
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
-                    StationLogo(image: logo)
-                        .frame(width: 48, height: 27)
-                    Text(channel.name)
-                        .font(.system(size: 16, weight: .semibold))
-                        .lineLimit(1)
-                }
-                // 番組がまだ無いときも 2 行分の高さをそろえる
-                Text(program ?? " ")
-                    .lineLimit(2, reservesSpace: true)
-                    .truncationMode(.tail)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(hovering ? Color.buttonHover : Color.button)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .contentShape(Rectangle())
-        .onHover { hovering = $0 }
-        .onTapGesture(perform: action)
-    }
-}
-
-/// 映像のページ。上に一覧へ戻るボタンと再生中の操作、その下に映像
+/// 視聴画面。上にデバイスの状態と再生の操作、その下に映像。局は番組表の局名か数字キー・左右の矢印で選ぶ
 struct PlayerPage: View {
     @ObservedObject var model: PlayerModel
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                // 一覧に戻る（Esc と delete でも戻る）
-                IconButton(symbol: "chevron.left", help: "チャンネル一覧（Esc）", active: false) { model.backToList() }
-                    .keyboardShortcut(.cancelAction)
+                // デバイスの状態と、見えないときに確かめ直すボタン
+                DeviceStatusView(device: model.device)
+                IconButton(symbol: "arrow.clockwise", help: "デバイスを再スキャン", active: false) {
+                    model.checkDevices()
+                }
+                .disabled(model.device == .checking || model.scanning)
+                IconButton(symbol: "power", help: "coax を再起動", active: false) {
+                    model.restartCoax()
+                }
+                .disabled(model.device == .checking || model.scanning)
                 Spacer()
+                if !model.channels.isEmpty {
+                    IconButton(symbol: "calendar", help: "番組表（G）", active: model.showsGuide) { model.showsGuide.toggle() }
+                }
                 if model.playingChannel != nil {
                     IconButton(symbol: model.showsDetail ? "info.circle.fill" : "info.circle",
                                help: "番組詳細（I）", active: model.showsDetail) { model.showsDetail.toggle() }
@@ -389,11 +287,44 @@ struct PlayerPage: View {
             .padding(.vertical, 6)
             .background(Color.panel)
             VideoArea(model: model)
+                // 番組表か番組詳細を出しているときに映像を押したら、どちらも閉じる。
+                // 番組詳細と番組表はこの上に重ねるので、それらの中を押しても閉じない
+                .overlay {
+                    if model.showsGuide || (model.showsDetail && model.playingChannel != nil) {
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                model.showsGuide = false
+                                model.showsDetail = false
+                            }
+                    }
+                }
                 // 映像の右に重ねる。ファイルの再生には番組情報が無いので、チャンネルを見ているときだけ出す
                 .overlay(alignment: .trailing) {
                     if model.showsDetail && model.playingChannel != nil {
                         ProgramPanel(detail: model.nowDetail)
                             .frame(width: 320)
+                    }
+                }
+                // チャンネル一覧が無いときは、設定画面でスキャンしてもらう
+                .overlay {
+                    if model.channels.isEmpty {
+                        VStack(spacing: 12) {
+                            Text("チャンネル一覧がありません")
+                                .foregroundStyle(Color.placeholder)
+                            OpenSettingsButton(label: "設定を開いてスキャン")
+                                .fixedSize()
+                        }
+                    }
+                }
+                // 番組表は映像の下半分に半透明で重ねる
+                .overlay(alignment: .bottom) {
+                    if model.showsGuide && !model.channels.isEmpty {
+                        GeometryReader { geometry in
+                            GuidePage(model: model, guide: model.guide)
+                                .frame(height: geometry.size.height / 2)
+                                .frame(maxHeight: .infinity, alignment: .bottom)
+                        }
                     }
                 }
         }

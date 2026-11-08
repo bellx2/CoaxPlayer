@@ -4,7 +4,7 @@
 
 - `Sources/CMpv` — libmpv の system library target（`module.modulemap`。ヘッダーとライブラリの場所は `Package.swift` で `.deps/prefix` を指定）
 - `Sources/CAribCaption` — libaribcaption の system library target
-- `Sources/CoaxPlayer/App.swift` — SwiftUI の画面と AppDelegate（終了時の後始末）。最初のページにチャンネル一覧、選ぶと映像のページ（上にボタン、映像とその下のチャンネルと番組の行）。どちらも下に受信状態の 1 行。設定画面（チューナー、スキャン、外部デコーダー）
+- `Sources/CoaxPlayer/App.swift` — SwiftUI の画面と AppDelegate（終了時の後始末）。視聴画面だけの 1 ページ（上にデバイスの状態とボタン、映像とその下のチャンネルと番組の行、下に受信状態の 1 行。番組表は映像に重ねる）。設定画面（チューナー、スキャン、外部デコーダー）
 - `Sources/CoaxPlayer/PlayerModel.swift` — 起動引数、選局・停止、録画、スキャン、受信状態の保持
 - `Sources/CoaxPlayer/MPVPlayer.swift` — libmpv の初期化、ソフトウェアレンダラでの描画、トラックの選択、イベント処理
 - `Sources/CoaxPlayer/Enhancer.swift` — 高精細化（ノイズ除去と超解像、macOS 26 以降）
@@ -12,10 +12,11 @@
 - `Sources/CoaxPlayer/CoaxProcess.swift` — `coax tune`・`coax scan`・`coax pcsc` とデコーダーの子プロセス。stdout を fd で返し（tune はデコーダーか中継へ）、stderr を 1 行ずつ通知
 - `Sources/CoaxPlayer/StreamTee.swift` — coax の出力を mpv へ中継し、録画中はファイルにも書く。字幕の PES もここで取り出す
 - `Sources/CoaxPlayer/CaptionExtractor.swift` — TS から、再生中の番組の字幕の PES を取り出す
-- `Sources/CoaxPlayer/PreviewGrabber.swift` — 番組情報を取るときの TS からワンセグの映像を抜き出し、ffmpeg で 1 コマを一覧のプレビューにする
 - `Sources/CoaxPlayer/LogoExtractor.swift` — TS の CDT から局ロゴの PNG を取り出し、パレットを足す
 - `Sources/CoaxPlayer/CaptionRenderer.swift` — 字幕を libaribcaption で解読し、映像の表示領域の実ピクセル数で描く
 - `Sources/CoaxPlayer/Updater.swift` — GitHub の最新の Release（API の `releases/latest`）で新しい版を確かめ、Homebrew で入れていれば brew で更新して起動し直す
+- `Sources/CoaxPlayer/Guide.swift` — 視聴中に集めた番組表（`--schedule` の行）の保持と保存
+- `Sources/CoaxPlayer/GuideView.swift` — 番組表（視聴画面の下半分に重ねる）
 - `Sources/CoaxPlayer/Channels.swift` — `scan.json` から受信できたチャンネルを読む（リモコンの番号、局ロゴの在りかも）。スキャンで選べる範囲
 - `scripts/build-deps.sh` — libmpv と依存ライブラリのビルド
 - `scripts/bundle.sh` — `.app` の組み立て
@@ -23,23 +24,31 @@
 
 ## 選局と再生の流れ
 
-1. 一覧のチャンネルを押すと `coax tune --ch N --stats --program` を起動する（デコーダーを指定していれば、その stdin につなぐ）
+1. 局を選ぶと（起動時は前回最後に見た局）`coax tune --ch N --stats --program --schedule` を起動する（デコーダーを指定していれば、その stdin につなぐ）
 2. 出力は `StreamTee` が読んで、パイプ経由で `fdclose://N` として mpv に渡す（mpv が読み終えたら閉じる）。録画中はファイルにも書き、字幕の PES も取り出す
 3. coax の stderr の行を画面下に表示する。`now` の行（`--program`）は今の番組として映像の下の行に出す。`now` の行と、それに続く `now-text`・`now-item` の詳細の行は、番組詳細のパネルにも出す（`next` で始まる次の番組の行は使わない）（詳細の行の `\n`・`\t`・`\\` は元に戻す）。それ以外は受信状態として最新の 1 行をそのまま出す（coax がエラーで終わったときはそのメッセージが残る）
 4. 「停止」・チャンネル切替・ウィンドウを閉じる・Ctrl-C/SIGTERM では、子プロセスへ SIGTERM を送り、3 秒で終わらなければ SIGKILL して終了を待つ
 
-設定画面でチューナーを PIX-DT295 にしたときは、1 の `coax tune --ch N` の代わりに、pix-userland の `pix-ts` の出力を `coax tune --input - --stats --program` に流す。デコーダーは通さない。pixd の起動と止め方、番組集めの違いは [dt295.md](dt295.md) にある。
+設定画面でチューナーを PIX-DT295 にしたときは、1 の `coax tune --ch N` の代わりに、pix-userland の `pix-ts` の出力を `coax tune --input - --stats --program --schedule` に流す。デコーダーは通さない。pixd の起動と止め方は [dt295.md](dt295.md) にある。
 
-一覧の今の番組は、チャンネルを順に `coax tune --ch N --program --priority -1` で選局し（視聴の選局がチューナーを奪えるよう、優先度を下げる）、`now` の行が届いたら（10 秒で届かなければあきらめて）次へ進んで集める。TS は使わないが、読まずに閉じると coax が書き込みで終わるので読み捨てる。全局の番組を集め終えてから、ワンセグのある局をもう一周してプレビューを集める。プレビューはワンセグの映像のキーフレームを待つので 1 局 1〜3 秒かかり、番組（約 1 秒）と一緒に待つと番組名がそろうのが遅れるため（12 局で、番組名がそろうまでが 30 秒から 14 秒になった）。
+デバイスの状態は `coax list --tuners --json` で各デバイスを開いて確かめる。`tuners` は開けなくても型番から埋まるので、`probe_error` が無いものだけを見つかったとみなす。選局中は開けないので、確かめる前に再生を止め、見つかったら最後に見た局を選局し直す。coax の再起動は、`pkill -x coaxd` で止めて終わるのを待ち（最大 3 秒）、coax pcsc を立て直してから確かめ直す（coaxd は次の coax が起動する）。
 
-プレビューは、同じ TS から PAT と、ワンセグ（`scan.json` の部分受信のサービス）の PMT・H.264 の映像のパケットだけを抜き出して同梱の ffmpeg に渡し、最初の 1 コマを 320x180 の生の画素（rawvideo）で受け取って JPEG にする（`PreviewGrabber.swift`）。フルセグの映像はスクランブルがかかっていて取り出せず、ほかの番組も渡すと ffmpeg がそれらを調べ終えるまで待つため、ワンセグだけを渡す。プレビューの周では、プレビューが取れたら（10 秒で取れなければあきらめて）次の局へ進む。その周で届いた番組の行も反映する。保存先は `~/Library/Application Support/CoaxPlayer/previews/<物理チャンネル>.jpg`。
+チャンネル一覧（番組表の局の並び、左右の矢印キーの順）は、リモコンの番号（NIT の TS 情報記述子の `remote_control_key_id`）の順に、番号とサービス名を並べる。番号が無い古い `scan.json` では物理チャンネル（`27ch` など）を出す。
 
-デバイスの状態は `coax list --tuners --json` で各デバイスを開いて確かめる。`tuners` は開けなくても型番から埋まるので、`probe_error` が無いものだけを見つかったとみなす。選局中は開けないので、確かめる前に番組の取得を止める。coax の再起動は、`pkill -x coaxd` で止めて終わるのを待ち（最大 3 秒）、coax pcsc を立て直してから確かめ直す（coaxd は次の coax が起動する）。
-
-チャンネル一覧は、リモコンの番号（NIT の TS 情報記述子の `remote_control_key_id`）の順に、番号とサービス名を並べる。番号が無い古い `scan.json` では物理チャンネル（`27ch` など）を出す。
-
-スキャンは設定画面から、`coax scan --discover=ISDBT --lock-timeout 3s --include '^(選んだ範囲)$' --output <--scan のパス> --restart` を実行し、終わると一覧を読み込む。チューナーが PIX-DT295 のときは、`--data-timeout 5s --tune-command <pix-ts のコマンド>` を足す（[dt295.md](dt295.md#スキャン)）。
+スキャンは設定画面から、`coax scan --discover=ISDBT --lock-timeout 3s --include '^(選んだ範囲)$' --output <--scan のパス> --restart` を実行し、終わると一覧を読み込み、一覧の先頭の局を見始める（前回の局が一覧にあればその局）。チューナーが PIX-DT295 のときは、`--data-timeout 5s --tune-command <pix-ts のコマンド>` を足す（[dt295.md](dt295.md#スキャン)）。
 実行中は設定画面に進捗の行を出し、「中止」で止められる。coax は進捗を残すので、中止した次のスキャンだけは `--restart` を付けずに続きから調べる。
+
+## 番組表
+
+番組表は、視聴中の選局に付けた `coax tune --schedule` の行（EIT のスケジュールの 1 セクションを 1 行の JSON にしたもの）から作る（`Guide.swift`）。地上波の TS には同じ物理チャンネルのサービスの番組表しか無いので、見た局だけが埋まる。27ch（NHK 総合）で、8 日分がそろうまで約 60 秒だった。
+
+1. 物理チャンネルごとに、セクション（original_network_id・transport_stream_id・service_id・テーブル ID・セクション番号）の最新の版を持つ。版が変われば置き換えるので、番組の変更や取り消しも反映される
+2. 基本情報（テーブル ID の下位 4 ビットが 0〜7。番組名と説明）と拡張情報（8〜F。詳しい説明の項目だけ）を、サービスと番組 ID でまとめて 1 番組にする。セクションは 1 分ほど続けて届くので、並べ直しは 1 秒まとめて行う
+3. 一つの局に複数のサービスがあるときは、最初のサービス（局名を取るもの、`serviceID`）の番組だけを出す
+4. セクションのまま `~/Library/Application Support/CoaxPlayer/guide.json` に保存する。書くのは、変わったものがあるときの停止（チャンネル切替）と終了のとき。番組がすべて終わって 1 日たったセクションは捨てる
+5. 開始時刻は時差の付かない日本時間の文字列なので、Asia/Tokyo として読む
+
+番組表（`GuideView.swift`）は、視聴画面の映像の下半分に半透明で重ねる。横に局（一覧と同じ並び）、縦に 1 分 3 ポイントで 1 日（5 時から翌 5 時）を並べる。縦横を 1 つのスクロールにし、局名の行は上に留める（横には表と一緒に動く）。
 
 ## 局ロゴ
 

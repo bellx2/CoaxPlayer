@@ -31,11 +31,11 @@ COAX_DIR=../coax ./scripts/bundle.sh     # dist/CoaxPlayer.app を作る（既�
 
 - 依存ライブラリは Homebrew のものを使わず、`scripts/build-deps.sh` で `.deps/prefix` に自前ビルドする。`Package.swift` はそこを `-I`/`-L` と rpath で参照し、`.app` では `Contents/Frameworks` から読む。mpv は `-Dgpl=false` で、GPL の部品を同梱しない
 - `Sources/CMpv`・`Sources/CAribCaption` は system library target。本体は `Sources/CoaxPlayer` の単一の executable target で、Swift 言語モードは v5
-- 再生の流れ: `PlayerModel` が `coax tune --ch N --stats --program` を子プロセス（`CoaxProcess`）で起動し（外部デコーダーがあればその stdin につなぐ）、`StreamTee` が出力を読んで `fdclose://` で mpv に渡す。同じ中継で、録画の書き出し、字幕の PES（`CaptionExtractor`）、局ロゴ（`LogoExtractor`）を取り出す。ファイルの再生はこの中継を通らないため、字幕も局ロゴも出ない
-- coax の stderr の行は UI の情報源になる。`now` の行は今の番組、それ以外は受信状態として表示する
+- 再生の流れ: `PlayerModel` が `coax tune --ch N --stats --program --schedule` を子プロセス（`CoaxProcess`）で起動し（外部デコーダーがあればその stdin につなぐ）、`StreamTee` が出力を読んで `fdclose://` で mpv に渡す。同じ中継で、録画の書き出し、字幕の PES（`CaptionExtractor`）、局ロゴ（`LogoExtractor`）を取り出す。ファイルの再生はこの中継を通らないため、字幕も局ロゴも出ない
+- coax の stderr の行は UI の情報源になる。`now` の行は今の番組、`schedule` の行は番組表（`ProgramGuide`）、それ以外は受信状態として表示する
 - 描画は mpv のソフトウェアレンダラで IOSurface 付き CVPixelBuffer に描き、CALayer の contents にする。字幕は mpv に描かせず（`sid=no`）、libaribcaption で別レイヤーに実ピクセル数で描く
 - 設定でチューナーを PIX-DT295 にすると、pix-userland の `pix-ts` の出力を `coax tune --input -` に流す（`PixUserland.swift`、docs/dt295.md）。pixd の起動と終了もアプリが受け持つ
-- 使っている `coax tune --stats/--program/--input`、`coax scan --tune-command` とスキャン結果の局ロゴ情報は、fork（bellx2/coax）の `coaxplayer` ブランチにしか無い。上流の coax では動かない
+- 使っている `coax tune --stats/--program/--schedule/--input`、`coax scan --tune-command` とスキャン結果の局ロゴ情報は、fork（bellx2/coax）の `coaxplayer` ブランチにしか無い。上流の coax では動かない
 
 ## 関連リポジトリ（../coax と ../libaribb25）
 
