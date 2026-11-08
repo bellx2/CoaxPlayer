@@ -46,7 +46,8 @@ GPL の部品を含めないので、同梱するライブラリは LGPL など�
 
 - 参照しているライブラリを `.deps` からたどって `Contents/Frameworks` に集め、参照先を `@rpath` に書き換える
 - `COAX_DIR` を渡すと、coax と coaxd を `Contents/MacOS` に入れる（coax は同じ場所の coaxd を起動する）。録画の変換と一覧のプレビューに使う ffmpeg は常に入れる
-- 同梱するライブラリと coax のライセンスの全文を `Contents/Resources/licenses/` に入れる
+- `PIX_DIR`（pix-userland のリポジトリ）を渡すと、`tools/build-portable.sh native` で作った `build/native` の pixd と pix-ts を `Contents/MacOS` に入れる（PIX-DT295 用）。ファームウェアの `dt295.bin` は再配布が制限されるので入れない
+- 同梱するライブラリ、coax、pix-userland のライセンスの全文を `Contents/Resources/licenses/` に入れる
 - アイコン `Resources/AppIcon.icns` を入れる。アイコンは `swift scripts/make-icon.swift` で描き直せる（CoreGraphics で描き、`sips` と `iconutil` で .icns にする）
 - 既定ではアドホック署名する。`SIGN_IDENTITY` を渡すと、その証明書で hardened runtime とタイムスタンプ付きで署名する（配布には、さらに公証が要る）
 - アプリの版は `bundle.sh` の `VERSION` に置く。変えるときは `CHANGELOG.md` もそろえる
@@ -58,6 +59,19 @@ GPL の部品を含めないので、同梱するライブラリは LGPL など�
 `coaxplayer` ブランチは、上流の main にこれらの変更を乗せたもの。上流に追従するときもこのブランチを更新し、リリースごとに `coaxplayer-v<版>` のタグを付ける。
 `bundle.sh` の `COAX_DIR` には、このブランチでビルドした coax を渡す。
 
+## pix-userland の版
+
+PIX-DT295 用に、pix-userland の pixd と pix-ts を同梱する。選局を速くした fork（[bellx2/pix-userland](https://github.com/bellx2/pix-userland)）の `main` を使い、リリースごとに `coaxplayer-v<版>` のタグを付ける。
+
+libusb を静的リンクし、macOS 13 でも動くようにビルドする。libusb の configure は SDK にある `pipe2` を見つけて使うが、`pipe2` は macOS 27 からしか無いので使わせない。
+
+```sh
+cd ../pix-userland
+ac_cv_func_pipe2=no MACOSX_DEPLOYMENT_TARGET=13.0 sh tools/build-portable.sh native   # build/native に出る
+cd -
+COAX_DIR=../coax PIX_DIR=../pix-userland ./scripts/bundle.sh
+```
+
 ## リリース（release.sh）
 
 署名と公証をした zip を GitHub Releases に上げ、tap の Cask を更新するところまでを 1 回で行う。Developer ID Application の証明書と、公証の認証情報が要る。
@@ -66,17 +80,18 @@ GPL の部品を含めないので、同梱するライブラリは LGPL など�
 # 公証の認証情報をキーチェーンに入れる（初回のみ。Apple ID とアプリ用パスワード、または API キー）
 xcrun notarytool store-credentials CoaxPlayer
 
-SIGN_IDENTITY="Developer ID Application: 名前 (チームID)" COAX_DIR=../coax ./scripts/release.sh
+SIGN_IDENTITY="Developer ID Application: 名前 (チームID)" COAX_DIR=../coax PIX_DIR=../pix-userland ./scripts/release.sh
 ```
 
 1. 公開できる状態かを先に確かめる
    - `CHANGELOG.md` に `## <版> - <日付>` の項がある（`未リリース` のままなら止める）
    - 作業ツリーに変更が無く、main を push 済みで、`v<版>` のタグがまだ無い
    - `COAX_DIR` の coax が `coaxplayer` ブランチで、変更が無く、bellx2/coax に push 済み
+   - `PIX_DIR` の pix-userland が `main` ブランチで、変更が無く、bellx2/pix-userland に push 済み
    - tap（`brew tap bellx2/tap`）に変更が無い
-2. `COAX_DIR` で coax と coaxd をビルドし、`bundle.sh` で署名した `.app` を作る
+2. `COAX_DIR` で coax と coaxd を、`PIX_DIR` で pixd と pix-ts（静的リンク、macOS 13 向け）をビルドし、`bundle.sh` で署名した `.app` を作る
 3. zip にして公証に出し（`notarytool submit --wait`）、通ったら公証の結果を `.app` に付けて（`stapler staple`）zip を作り直す
-4. `dist/` に zip、その `.sha256`、Cask（`coaxplayer.rb`）、リリースノートを作る。リリースノートは `CHANGELOG.md` の項と、同梱した coax のソースへのリンク（coaxd は GPL-2.0-only のため）
-5. 確認のあと、bellx2/coax に `coaxplayer-v<版>` のタグを付けて push し、GitHub Releases に `v<版>` を作って zip を上げ、tap の `Casks/coaxplayer.rb` を更新してコミット・push する
+4. `dist/` に zip、その `.sha256`、Cask（`coaxplayer.rb`）、リリースノートを作る。リリースノートは `CHANGELOG.md` の項と、同梱した coax と pix-userland のソースへのリンク（coaxd と pixd・pix-ts は GPL のため）
+5. 確認のあと、bellx2/coax と bellx2/pix-userland に `coaxplayer-v<版>` のタグを付けて push し、GitHub Releases に `v<版>` を作って zip を上げ、tap の `Casks/coaxplayer.rb` を更新してコミット・push する
 
 版を上げるときは、`bundle.sh` の `VERSION` と `CHANGELOG.md` の項をそろえる。

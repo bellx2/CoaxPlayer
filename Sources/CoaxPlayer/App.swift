@@ -646,14 +646,14 @@ struct SettingsView: View {
                     Text("PIX-DT295（pix-userland）").tag(TunerKind.pix)
                 }
                 if model.tunerKind == .pix {
-                    LabeledContent("pix-userland") {
-                        Text(model.pixFolder.isEmpty ? "未設定" : model.pixFolder)
+                    LabeledContent("ファームウェア") {
+                        Text(model.pixFirmware.isEmpty ? "未設定" : model.pixFirmware)
                             .lineLimit(1)
                             .truncationMode(.middle)
                             .textSelection(.enabled)
                     }
-                    Button("フォルダーを選ぶ…") { choosePixFolder() }
-                    Text("pixd・pix-ts と firmware/dt295.bin があるフォルダー（pix-userland の配布アーカイブを展開したもの）。チャンネルスキャンも PIX-DT295 で行う（地上 UHF だけ）。選局してから映るまで 2〜3 秒かかる")
+                    Button("dt295.bin を選ぶ…") { choosePixFirmware() }
+                    Text("PIX-DT295 のファームウェア（pix-userland の firmware/dt295.bin）。メーカー由来で再配布が制限されるので、このアプリには含まれない。チャンネルスキャンも PIX-DT295 で行う（地上 UHF だけ）。選局してから映るまで 2〜3 秒かかる")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -722,13 +722,12 @@ struct SettingsView: View {
         .frame(width: 480)
     }
 
-    private func choosePixFolder() {
+    private func choosePixFirmware() {
         let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
+        panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        model.pixFolder = url.path
+        model.pixFirmware = url.path
     }
 
     private func chooseDecoder() {

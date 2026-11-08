@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # リリースする。署名と公証をした zip を GitHub Releases に上げ、tap の Cask を更新する。
 #
-#   SIGN_IDENTITY="Developer ID Application: 名前 (チームID)" COAX_DIR=../coax ./scripts/release.sh
+#   SIGN_IDENTITY="Developer ID Application: 名前 (チームID)" COAX_DIR=../coax PIX_DIR=../pix-userland ./scripts/release.sh
 #
 # 前もって要るもの:
 #   - 公証の認証情報（`xcrun notarytool store-credentials CoaxPlayer`。プロファイル名は NOTARY_PROFILE で変えられる）
@@ -9,6 +9,8 @@
 #   - main を push 済みで、作業ツリーに変更が無いこと
 #   - COAX_DIR の coax が coaxplayer ブランチで、bellx2/coax に push 済みであること
 #     （coaxd は GPL なので、同梱した版に coaxplayer-v<版> のタグを付けてソースを示す）
+#   - PIX_DIR の pix-userland が main ブランチで、bellx2/pix-userland に push 済みであること
+#     （pixd と pix-ts も GPL なので、同じく coaxplayer-v<版> のタグを付ける）
 #   - tap（bellx2/homebrew-tap）を `brew tap bellx2/tap` で入れてあること
 # 出力: dist/CoaxPlayer_<版>_macos-arm64.zip とその .sha256、dist/coaxplayer.rb
 set -euo pipefail
@@ -17,6 +19,8 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 : "${SIGN_IDENTITY:?Developer ID Application の証明書の名前を SIGN_IDENTITY に入れてください}"
 : "${COAX_DIR:?同梱する coax のディレクトリを COAX_DIR に入れてください}"
 COAX_DIR=$(cd "$COAX_DIR" && pwd)
+: "${PIX_DIR:?同梱する pix-userland のディレクトリを PIX_DIR に入れてください}"
+PIX_DIR=$(cd "$PIX_DIR" && pwd)
 NOTARY_PROFILE=${NOTARY_PROFILE:-CoaxPlayer}
 VERSION=$(sed -n 's/^VERSION=//p' "$ROOT/scripts/bundle.sh")
 TAG=v$VERSION
@@ -45,14 +49,24 @@ COAX_COMMIT=$(git -C "$COAX_DIR" rev-parse HEAD)
 git -C "$COAX_DIR" fetch -q origin
 [ "$COAX_COMMIT" = "$(git -C "$COAX_DIR" rev-parse origin/coaxplayer)" ] || fail "COAX_DIR の HEAD が bellx2/coax の coaxplayer と違います（push してください）"
 ! git -C "$COAX_DIR" ls-remote --exit-code --tags origin "$COAX_TAG" >/dev/null || fail "bellx2/coax に $COAX_TAG はもうあります"
+[ -z "$(git -C "$PIX_DIR" status --porcelain --untracked-files=no)" ] || fail "PIX_DIR に変更があります"
+[ "$(git -C "$PIX_DIR" branch --show-current)" = main ] || fail "PIX_DIR が main ブランチではありません"
+PIX_COMMIT=$(git -C "$PIX_DIR" rev-parse HEAD)
+git -C "$PIX_DIR" fetch -q origin
+[ "$PIX_COMMIT" = "$(git -C "$PIX_DIR" rev-parse origin/main)" ] || fail "PIX_DIR の HEAD が bellx2/pix-userland の main と違います（push してください）"
+! git -C "$PIX_DIR" ls-remote --exit-code --tags origin "$COAX_TAG" >/dev/null || fail "bellx2/pix-userland に $COAX_TAG はもうあります"
 [ -d "$TAP/Casks" ] || fail "tap がありません（brew tap bellx2/tap）"
 [ -z "$(git -C "$TAP" status --porcelain)" ] || fail "tap に変更があります"
 
 # 同梱する coax は、示すソースと同じものにするため、ここでビルドする
 (cd "$COAX_DIR" && go build -o coax ./cmd/coax && go build -o coaxd ./cmd/coaxd)
 COAX_VERSION=$("$COAX_DIR/coax" version)
+# pixd と pix-ts も同じ理由でここでビルドする。libusb を静的リンクし、macOS 13 でも動くようにする
+# （libusb の configure は SDK の pipe2 を見つけるが、pipe2 は macOS 27 からしか無い）
+(cd "$PIX_DIR" && ac_cv_func_pipe2=no MACOSX_DEPLOYMENT_TARGET=13.0 sh tools/build-portable.sh native)
+PIX_VERSION=$("$PIX_DIR/build/native/pixd" --version)
 
-SIGN_IDENTITY=$SIGN_IDENTITY COAX_DIR=$COAX_DIR "$ROOT/scripts/bundle.sh"
+SIGN_IDENTITY=$SIGN_IDENTITY COAX_DIR=$COAX_DIR PIX_DIR=$PIX_DIR "$ROOT/scripts/bundle.sh"
 codesign --verify --deep --strict --verbose=2 "$APP"
 
 # 公証には zip で出す。通ったら .app に結果を付け、付けた .app で zip を作り直す
@@ -94,18 +108,22 @@ NOTES=$ROOT/dist/release-notes.md
   awk -v v="$VERSION" '$0 ~ "^## " v " " {f=1; next} /^## / {f=0} f' "$ROOT/CHANGELOG.md"
   echo
   echo "同梱の coax: ${COAX_VERSION}（ソース: https://github.com/bellx2/coax/tree/${COAX_TAG}）"
+  echo "同梱の pixd・pix-ts: ${PIX_VERSION}（ソース: https://github.com/bellx2/pix-userland/tree/${COAX_TAG}）"
 } > "$NOTES"
 
 echo
 echo "公開するもの:"
 echo "  GitHub Releases: bellx2/CoaxPlayer ${TAG}（$(basename "$ZIP")）"
 echo "  coax のタグ: bellx2/coax ${COAX_TAG}（${COAX_COMMIT}）"
+echo "  pix-userland のタグ: bellx2/pix-userland ${COAX_TAG}（${PIX_COMMIT}）"
 echo "  Cask: $TAP/Casks/coaxplayer.rb"
 read -r -p "公開しますか [y/N] " answer
 [ "$answer" = y ] || fail "公開を中止しました（作ったものは dist/ に残っています）"
 
 git -C "$COAX_DIR" tag -a "$COAX_TAG" -m "CoaxPlayer $VERSION に同梱した coax" "$COAX_COMMIT"
 git -C "$COAX_DIR" push -q origin "$COAX_TAG"
+git -C "$PIX_DIR" tag -a "$COAX_TAG" -m "CoaxPlayer $VERSION に同梱した pixd と pix-ts" "$PIX_COMMIT"
+git -C "$PIX_DIR" push -q origin "$COAX_TAG"
 
 gh release create "$TAG" "$ZIP" "$ZIP.sha256" -R bellx2/CoaxPlayer \
   --target "$(git -C "$ROOT" rev-parse HEAD)" --title "CoaxPlayer $VERSION" --notes-file "$NOTES"

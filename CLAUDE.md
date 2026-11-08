@@ -21,7 +21,7 @@ swift run CoaxPlayer --coax ../coax/coax # 起動
 # チューナー無しで選局の経路を試す（scripts/fake-coax.sh が FAKE_TS を流し、coax と同じ形の stderr 行を出す）
 FAKE_TS=testdata/oneseg-ch27.ts swift run CoaxPlayer --coax "$PWD/scripts/fake-coax.sh" --scan /path/to/scan.json --ch 27
 
-COAX_DIR=../coax ./scripts/bundle.sh     # dist/CoaxPlayer.app を作る（既定はアドホック署名）
+COAX_DIR=../coax PIX_DIR=../pix-userland ./scripts/bundle.sh   # dist/CoaxPlayer.app を作る（既定はアドホック署名。pix は docs/build.md の手順で先にビルド）
 ```
 
 - テストターゲットとリンターは無い。動作確認は fake-coax.sh か実機で行う。`testdata/`（gitignore 済み）にワンセグ・フルセグ・字幕入りの TS がある
@@ -34,10 +34,10 @@ COAX_DIR=../coax ./scripts/bundle.sh     # dist/CoaxPlayer.app を作る（既�
 - 再生の流れ: `PlayerModel` が `coax tune --ch N --stats --program` を子プロセス（`CoaxProcess`）で起動し（外部デコーダーがあればその stdin につなぐ）、`StreamTee` が出力を読んで `fdclose://` で mpv に渡す。同じ中継で、録画の書き出し、字幕の PES（`CaptionExtractor`）、局ロゴ（`LogoExtractor`）を取り出す。ファイルの再生はこの中継を通らないため、字幕も局ロゴも出ない
 - coax の stderr の行は UI の情報源になる。`now` の行は今の番組、それ以外は受信状態として表示する
 - 描画は mpv のソフトウェアレンダラで IOSurface 付き CVPixelBuffer に描き、CALayer の contents にする。字幕は mpv に描かせず（`sid=no`）、libaribcaption で別レイヤーに実ピクセル数で描く
-- 設定でチューナーを PIX-DT295 にすると、pix-userland の `pix-ts` の出力を `coax tune --input -` に流す（`PixUserland.swift`、docs/dt295.md）。pixd の起動と終了もアプリが受け持つ
+- 設定でチューナーを PIX-DT295 にすると、pix-userland の `pix-ts` の出力を `coax tune --input -` に流す（`PixUserland.swift`、docs/dt295.md）。pixd の起動と終了もアプリが受け持つ。pixd と pix-ts は .app に同梱し、ファームウェア（dt295.bin）だけ利用者が設定で指定する
 - 使っている `coax tune --stats/--program/--input`、`coax scan --tune-command` とスキャン結果の局ロゴ情報は、fork（bellx2/coax）の `coaxplayer` ブランチにしか無い。上流の coax では動かない
 
-## 関連リポジトリ（../coax と ../libaribb25）
+## 関連リポジトリ（../coax、../pix-userland、../libaribb25）
 
 ### ../coax（bellx2/coax、Go）
 
@@ -45,6 +45,13 @@ COAX_DIR=../coax ./scripts/bundle.sh     # dist/CoaxPlayer.app を作る（既�
 - `coax` はクライアント CLI、`coaxd` はチューナーを管理するデーモン（GPL-2.0-only）。`coax` は同じディレクトリの `coaxd` を自動で起動する
 - ビルドは `go build -o coax ./cmd/coax && go build -o coaxd ./cmd/coaxd`（`CGO_ENABLED=0` で可）。開発中は `swift run CoaxPlayer --coax ../coax/coax`、`.app` には `COAX_DIR=../coax ./scripts/bundle.sh` で同梱する
 - CoaxPlayer が新しく coax の機能を必要とするときは、`coaxplayer` ブランチに足す。上流に追従するときもこのブランチを更新し、リリースごとに `coaxplayer-v<版>` のタグを付ける（`release.sh` が、ブランチ・変更なし・push 済みであることを確かめてからタグを付ける）
+
+### ../pix-userland（bellx2/pix-userland、C/C++/CMake）
+
+- PIX-DT295 のユーザー空間ドライバー（上流 Khronos31/pix-userland の fork）。remote は `origin`（bellx2）と `upstream`（Khronos31）。CoaxPlayer 用の変更（選局の高速化、macOS のビルド修正）は `main` に乗せる
+- pixd と pix-ts を .app に同梱する。静的リンク版は `ac_cv_func_pipe2=no MACOSX_DEPLOYMENT_TARGET=13.0 sh tools/build-portable.sh native` で `build/native` に作る（docs/build.md）。`release.sh` はこれを自分でビルドし、`coaxplayer-v<版>` のタグを付ける
+- 開発中は同梱が無いので、設定のファームウェアのパスの 2 つ上のフォルダー（配布アーカイブの並び）から pixd と pix-ts を探す
+- 作者の安全のための手順（PSI がそろうまで待つ、選局ごとのチューナー初期化、受信終了ごとのセッション張り直し）は変えない
 
 ### ../libaribb25（bellx2/libaribb25、C/CMake）
 

@@ -44,7 +44,7 @@ Homebrew を使わないときは、[Releases](https://github.com/bellx2/CoaxPla
 
 フルセグを見るには、利用者が用意した外部のデコーダーを設定画面で指定します（[docs/decoder.md](docs/decoder.md)）。デコーダーはこのアプリには含まれません。
 
-ピクセラの PIX-DT295 は、利用者が用意した [pix-userland](https://github.com/Khronos31/pix-userland) を通して使えます。設定画面の「チューナー」で選びます（[docs/dt295.md](docs/dt295.md)）。
+ピクセラの PIX-DT295 も使えます。設定画面の「チューナー」で選び、ファームウェア（[pix-userland](https://github.com/Khronos31/pix-userland) の `firmware/dt295.bin`）を指定します（[docs/dt295.md](docs/dt295.md)）。ファームウェアはこのアプリには含まれません。
 
 ## 既知の制限
 
