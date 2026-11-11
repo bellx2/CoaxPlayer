@@ -2,7 +2,7 @@
 
 [coax](https://github.com/Till0196/coax)（Till0196 さん作）で受信した地上デジタル放送を見るための、macOS 用のプレーヤーです。
 
-![チャンネル一覧（番組の映像と局ロゴはぼかしている）](docs/images/screenshot.png)
+![再生中の画面と番組表](docs/images/screenshot.png)
 
 - チャンネルスキャンと、番組表の局名・数字キーからの選局（起動すると前回の局を見始める）
 - ワンセグ・フルセグの再生、ARIB 字幕、二か国語（主・副音声）の切り替え
