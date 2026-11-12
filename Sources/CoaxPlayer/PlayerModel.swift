@@ -77,6 +77,13 @@ final class PlayerModel: ObservableObject {
     @Published var showsReception = UserDefaults.standard.bool(forKey: "showsReception") {
         didSet { UserDefaults.standard.set(showsReception, forKey: "showsReception") }
     }
+    /// 字幕の行ごとに半透明の黒の背景を敷くか（縁取りはどちらでも付ける）。選んでいなければ、これまでどおり敷く
+    @Published var captionBackground = UserDefaults.standard.object(forKey: "captionBackground") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(captionBackground, forKey: "captionBackground")
+            captionRenderer?.setBackground(captionBackground)
+        }
+    }
     /// 設定画面で選んだデコーダー。空なら Homebrew で入れたものを探す
     @Published var decoderSetting = UserDefaults.standard.string(forKey: "decoderPath") ?? "" {
         didSet {
@@ -893,7 +900,7 @@ final class PlayerModel: ObservableObject {
 
     /// 中継から字幕の PES を受け取って解読し、mpv の再生位置に合わせて描く
     private func startCaptions(_ tee: StreamTee) {
-        guard let renderer = CaptionRenderer() else { return }
+        guard let renderer = CaptionRenderer(background: captionBackground) else { return }
         captionRenderer = renderer
         tee.captions.onPES = { data, pts, profile in renderer.decode(data, pts: pts, profile: profile) }
         captionTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in

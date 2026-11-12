@@ -135,6 +135,11 @@ struct GuidePage: View {
         }
         .frame(width: Self.columnWidth, alignment: .topLeading)
         .clipped()
+        // 列を押してもその局へ切り替える。見ている局なら、選局し直して途切れないよう何もしない
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if model.current?.id != channel.id { model.play(channel) }
+        }
     }
 
     /// 今の時刻の線。見ている日が今日のときだけ

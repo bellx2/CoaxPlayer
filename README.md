@@ -38,14 +38,14 @@ Homebrew を使わないときは、[Releases](https://github.com/bellx2/CoaxPla
 
 ## 使い方
 
-1. `CoaxPlayer.app` を起動し、設定画面（⌘,）の「チャンネルスキャン」でスキャンします
+1. `CoaxPlayer.app` を起動し、設定画面（⌘,）の「スキャン」タブでスキャンします
 2. 前回見ていた局（初めては一覧の先頭の局）を見始めます。局は番組表の局名か数字キー、左右の矢印キーで替えます
 
 数字キーでも、リモコンの番号で選局できます。詳しくは [docs/usage.md](docs/usage.md)。
 
-フルセグを見るには、利用者が用意した外部のデコーダーを設定画面で指定します（[docs/decoder.md](docs/decoder.md)）。デコーダーはこのアプリには含まれません。
+フルセグを見るには、利用者が用意した外部のデコーダーを設定画面の「チューナー」タブで指定します（[docs/decoder.md](docs/decoder.md)）。デコーダーはこのアプリには含まれません。
 
-ピクセラの PIX-DT295 も使えます。設定画面の「チューナー」で選び、ファームウェア（[pix-userland](https://github.com/Khronos31/pix-userland) の `firmware/dt295.bin`）を指定します（[docs/dt295.md](docs/dt295.md)）。ファームウェアはこのアプリには含まれません。
+ピクセラの PIX-DT295 も使えます。設定画面の「チューナー」タブで選び、ファームウェア（[pix-userland](https://github.com/Khronos31/pix-userland) の `firmware/dt295.bin`）を指定します（[docs/dt295.md](docs/dt295.md)）。ファームウェアはこのアプリには含まれません。
 
 ## 既知の制限
 

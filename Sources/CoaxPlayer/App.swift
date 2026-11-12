@@ -565,92 +565,118 @@ struct CaptionView: NSViewRepresentable {
     }
 }
 
-/// 設定画面（⌘,）。チャンネルのスキャンを置く
+/// 設定画面（⌘,）。項目が多いのでタブに分ける
 struct SettingsView: View {
     @ObservedObject var model: PlayerModel
 
     var body: some View {
-        Form {
-            Section("チューナー") {
-                Picker("使うチューナー", selection: $model.tunerKind) {
-                    Text("coax").tag(TunerKind.coax)
-                    Text("PIX-DT295（pix-userland）").tag(TunerKind.pix)
+        TabView {
+            page {
+                Section("チューナー") {
+                    Picker("使うチューナー", selection: $model.tunerKind) {
+                        Text("coax").tag(TunerKind.coax)
+                        Text("PIX-DT295（pix-userland）").tag(TunerKind.pix)
+                    }
+                    if model.tunerKind == .pix {
+                        LabeledContent("ファームウェア") {
+                            Text(model.pixFirmware.isEmpty ? "未設定" : model.pixFirmware)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .textSelection(.enabled)
+                        }
+                        Button("dt295.bin を選ぶ…") { choosePixFirmware() }
+                        Text("PIX-DT295 のファームウェア（pix-userland の firmware/dt295.bin）。メーカー由来で再配布が制限されるので、このアプリには含まれない。チャンネルスキャンも PIX-DT295 で行う（地上 UHF だけ）。選局してから映るまで 2〜3 秒かかる")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                if model.tunerKind == .pix {
-                    LabeledContent("ファームウェア") {
-                        Text(model.pixFirmware.isEmpty ? "未設定" : model.pixFirmware)
+                Section("外部デコーダー") {
+                    LabeledContent("デコーダー") {
+                        Text(model.decoderPath ?? "なし")
                             .lineLimit(1)
                             .truncationMode(.middle)
                             .textSelection(.enabled)
                     }
-                    Button("dt295.bin を選ぶ…") { choosePixFirmware() }
-                    Text("PIX-DT295 のファームウェア（pix-userland の firmware/dt295.bin）。メーカー由来で再配布が制限されるので、このアプリには含まれない。チャンネルスキャンも PIX-DT295 で行う（地上 UHF だけ）。選局してから映るまで 2〜3 秒かかる")
+                    HStack {
+                        Button("選ぶ…") { chooseDecoder() }
+                        Button("自動に戻す") { model.decoderSetting = "" }
+                            .disabled(model.decoderSetting.isEmpty)
+                    }
+                    .disabled(model.config.decoderPath != nil)
+                    Text(model.config.decoderPath != nil
+                         ? "起動引数の --decoder を使っている"
+                         : "選局した TS を通すコマンド。選ばなければ、Homebrew で入れた \(PlayerModel.homebrewDecoderPath) があれば使う。次の選局から使う")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
-            Section("チャンネルスキャン") {
-                ForEach(ScanRange.all.indices, id: \.self) { index in
-                    Toggle(ScanRange.all[index].label, isOn: $model.ranges[index])
-                        .disabled(model.scanning)
-                }
-                HStack {
-                    if model.scanning {
-                        Button("中止") { model.cancelScan() }
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Button("スキャン開始") { model.startScan() }
+            .tabItem { Label("チューナー", systemImage: "antenna.radiowaves.left.and.right") }
+            page {
+                Section("チャンネルスキャン") {
+                    ForEach(ScanRange.all.indices, id: \.self) { index in
+                        Toggle(ScanRange.all[index].label, isOn: $model.ranges[index])
+                            .disabled(model.scanning)
                     }
-                    Text(model.scanStatus)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    HStack {
+                        if model.scanning {
+                            Button("中止") { model.cancelScan() }
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Button("スキャン開始") { model.startScan() }
+                        }
+                        Text(model.scanStatus)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .foregroundStyle(.secondary)
+                    }
+                    Text("今の一覧: \(model.channels.count) チャンネル。スキャン中は再生を止め、終わると一覧を作り直す")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                Text("今の一覧: \(model.channels.count) チャンネル。スキャン中は再生を止め、終わると一覧を作り直す")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
-            Section("デバッグ") {
-                Toggle("画面下に受信状態の詳細を表示", isOn: $model.showsReception)
-                Text("CNR、信号の強さ、ビットレート、エラー数など")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Section("外部デコーダー") {
-                LabeledContent("デコーダー") {
-                    Text(model.decoderPath ?? "なし")
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .textSelection(.enabled)
+            .tabItem { Label("スキャン", systemImage: "list.number") }
+            page {
+                Section("字幕") {
+                    Picker("字幕の背景", selection: $model.captionBackground) {
+                        Text("なし").tag(false)
+                        Text("半透明の黒").tag(true)
+                    }
+                    Text("文字にはどちらでも黒の縁取りを付ける。背景なしは映像を隠さず、半透明の黒は細かい模様の上でも読みやすい。次に出る字幕から変わる")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                HStack {
-                    Button("選ぶ…") { chooseDecoder() }
-                    Button("自動に戻す") { model.decoderSetting = "" }
-                        .disabled(model.decoderSetting.isEmpty)
+                Section("デバッグ") {
+                    Toggle("画面下に受信状態の詳細を表示", isOn: $model.showsReception)
+                    Text("CNR、信号の強さ、ビットレート、エラー数など")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                .disabled(model.config.decoderPath != nil)
-                Text(model.config.decoderPath != nil
-                     ? "起動引数の --decoder を使っている"
-                     : "選局した TS を通すコマンド。選ばなければ、Homebrew で入れた \(PlayerModel.homebrewDecoderPath) があれば使う。次の選局から使う")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
-            Section("録画の変換") {
-                TextField("ffmpeg の引数", text: $model.convertArguments, prompt: Text("空なら TS のまま"), axis: .vertical)
-                    .font(.system(.caption, design: .monospaced))
-                    .lineLimit(2...4)
-                HStack {
-                    Button("例を入れる") { model.convertArguments = PlayerModel.convertExample }
-                    Button("消す") { model.convertArguments = "" }
-                        .disabled(model.convertArguments.isEmpty)
+            .tabItem { Label("表示", systemImage: "textformat") }
+            page {
+                Section("録画の変換") {
+                    TextField("ffmpeg の引数", text: $model.convertArguments, prompt: Text("空なら TS のまま"), axis: .vertical)
+                        .font(.system(.caption, design: .monospaced))
+                        .lineLimit(2...4)
+                    HStack {
+                        Button("例を入れる") { model.convertArguments = PlayerModel.convertExample }
+                        Button("消す") { model.convertArguments = "" }
+                            .disabled(model.convertArguments.isEmpty)
+                    }
+                    Text("録画を止めたあと、同梱の ffmpeg にこの引数を渡す。{in} は TS、{out} は拡張子を除いたパス、{video}・{audio} は再生していた映像と音声。例は主音声だけの MP4 を作る")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                Text("録画を止めたあと、同梱の ffmpeg にこの引数を渡す。{in} は TS、{out} は拡張子を除いたパス、{video}・{audio} は再生していた映像と音声。例は主音声だけの MP4 を作る")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
+            .tabItem { Label("録画", systemImage: "record.circle") }
         }
-        .formStyle(.grouped)
-        .frame(width: 480)
+        .frame(width: 520, height: 520)
+    }
+
+    /// タブ 1 枚分のフォーム
+    private func page<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        Form { content() }
+            .formStyle(.grouped)
     }
 
     private func choosePixFirmware() {

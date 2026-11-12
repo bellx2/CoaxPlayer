@@ -23,8 +23,10 @@ final class CaptionRenderer {
     private var frameHeight = 0
     /// 字幕を表示中か。消えたときだけ通知するのに使う
     private var shown = false
+    /// 行ごとに半透明の黒を敷くか。縁取りはどちらでも付ける
+    private var background: Bool
 
-    init?() {
+    init?(background: Bool) {
         guard let context = aribcc_context_alloc() else { return nil }
         guard let decoder = aribcc_decoder_alloc(context), let renderer = aribcc_renderer_alloc(context),
               aribcc_renderer_initialize(renderer, ARIBCC_CAPTIONTYPE_CAPTION,
@@ -32,9 +34,27 @@ final class CaptionRenderer {
             aribcc_context_free(context)
             return nil
         }
+        // 放送側の背景は描かない。背景は設定で選んだときだけ、こちらで敷く
+        aribcc_renderer_set_force_no_background(renderer, true)
+        aribcc_renderer_set_stroke_width(renderer, Self.strokeWidth(background: background))
         self.context = context
         self.decoder = decoder
         self.renderer = renderer
+        self.background = background
+    }
+
+    /// 半透明の黒の背景を敷くかを切り替える。描き直したときに変わるので、次に出る字幕から変わる
+    func setBackground(_ background: Bool) {
+        queue.async { [self] in
+            self.background = background
+            aribcc_renderer_set_stroke_width(renderer, Self.strokeWidth(background: background))
+        }
+    }
+
+    /// 縁の太さ（字幕の座標 960x540 のドット数）。背景なしでは既定の 1.5 だと明るい場面で細く見えるので太くし、
+    /// 背景を敷くときは縁は補いなので既定のままにする
+    private static func strokeWidth(background: Bool) -> Float {
+        background ? 1.5 : 3
     }
 
     deinit {
@@ -66,6 +86,7 @@ final class CaptionRenderer {
                 aribcc_decoder_decode(decoder, $0.bindMemory(to: UInt8.self).baseAddress, data.count, pts, &caption)
             }
             if status == ARIBCC_DECODE_STATUS_GOT_CAPTION {
+                addBlackStroke(&caption)
                 aribcc_renderer_append_caption(renderer, &caption)
                 aribcc_caption_cleanup(&caption)
             }
@@ -94,6 +115,19 @@ final class CaptionRenderer {
                 DispatchQueue.main.async { update(nil) }
             default:
                 break
+            }
+        }
+    }
+
+    /// すべての文字に不透明の黒の縁を付ける。libaribcaption の強制縁取り（force_stroke_text）は
+    /// 縁の色に背景色を使うので、背景が半透明や透明だと縁が黒くならない
+    private func addBlackStroke(_ caption: inout aribcc_caption_t) {
+        let black = aribcc_color_t(0xff00_0000)  // ARIBCC_MAKE_RGBA(0, 0, 0, 255)
+        for r in 0..<Int(caption.region_count) {
+            let region = caption.regions[r]
+            for c in 0..<Int(region.char_count) {
+                region.chars[c].style = aribcc_charstyle_t(region.chars[c].style.rawValue | ARIBCC_CHARSTYLE_STROKE.rawValue)
+                region.chars[c].stroke_color = black
             }
         }
     }
@@ -128,9 +162,11 @@ final class CaptionRenderer {
             // CGContext は下が原点なので、上からの位置を反転する
             let target = CGRect(x: rect.minX - bounds.minX, y: bounds.maxY - rect.maxY,
                                 width: rect.width, height: rect.height)
-            // 字幕には縁も背景も無いものが多く、映像に重ねると明るい場面で読めないので、行ごとに半透明の黒を敷く
-            ctx.setFillColor(CGColor(gray: 0, alpha: 0.5))
-            ctx.fill(target)
+            if background {
+                // 縁取りだけでは細かい模様の上で読みにくいときのため、行ごとに半透明の黒を敷く
+                ctx.setFillColor(CGColor(gray: 0, alpha: 0.5))
+                ctx.fill(target)
+            }
             ctx.draw(cg, in: target)
         }
         guard let image = ctx.makeImage() else { return nil }

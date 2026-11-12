@@ -4,7 +4,7 @@
 
 - `Sources/CMpv` — libmpv の system library target（`module.modulemap`。ヘッダーとライブラリの場所は `Package.swift` で `.deps/prefix` を指定）
 - `Sources/CAribCaption` — libaribcaption の system library target
-- `Sources/CoaxPlayer/App.swift` — SwiftUI の画面と AppDelegate（終了時の後始末）。視聴画面だけの 1 ページ（上にデバイスの状態とボタン、映像とその下のチャンネルと番組の行、下に受信状態の 1 行。番組表は映像に重ねる）。設定画面（チューナー、スキャン、外部デコーダー）
+- `Sources/CoaxPlayer/App.swift` — SwiftUI の画面と AppDelegate（終了時の後始末）。視聴画面だけの 1 ページ（上にデバイスの状態とボタン、映像とその下のチャンネルと番組の行、下に受信状態の 1 行。番組表は映像に重ねる）。設定画面（チューナー・スキャン・表示・録画の 4 つのタブ）
 - `Sources/CoaxPlayer/PlayerModel.swift` — 起動引数、選局・停止、録画、スキャン、受信状態の保持
 - `Sources/CoaxPlayer/MPVPlayer.swift` — libmpv の初期化、ソフトウェアレンダラでの描画、トラックの選択、イベント処理
 - `Sources/CoaxPlayer/Enhancer.swift` — 高精細化（ノイズ除去と超解像、macOS 26 以降）
@@ -108,7 +108,9 @@ mpv には字幕を描かせず（`sid=no`）、アプリが別のレイヤー�
 1. 中継（`StreamTee.swift`）で TS を読み、再生中の映像と同じ番組の字幕の PES を取り出す（`CaptionExtractor.swift`）。PMT は PAT からたどるほか、PAT を含まないワンセグの TS のため、決まった PID（0x1FC8〜0x1FCF）も読む。フルセグも届いているときは、mpv が再生している映像の PID で番組を選ぶ
 2. libaribcaption で解読し、画面上の映像の表示領域の実ピクセル数（Retina では 2 倍）で描く（`CaptionRenderer.swift`）。文字は CoreText でヒラギノなどのシステムのフォントで描く
 3. 0.1 秒ごとに mpv の `time-pos` と字幕の PTS を比べ、その時刻の字幕を出す。`rebase-start-time=no` にして、`time-pos` を放送の時刻（PTS）のままにしている
-4. ワンセグの字幕には位置の情報が無い（TR-B14）ので、FFmpeg と同じく左右の中央で下から積む。縁も背景も無く明るい場面で読めないので、行ごとに半透明の黒を敷く
+4. ワンセグの字幕には位置の情報が無い（TR-B14）ので、FFmpeg と同じく左右の中央で下から積む
+5. 字幕には縁も背景も無いものが多く、明るい場面で読めないので、すべての文字に不透明の黒の縁（背景なしでは 3 ドット、背景を敷くときは 1.5 ドット）を付ける。libaribcaption の強制縁取りは縁の色に背景色を使うので、解読した字幕の文字ごとに縁の色を黒にしてから描く。放送側の背景は描かない（`aribcc_renderer_set_force_no_background`）
+6. 行ごとに半透明の黒を敷く。設定（`captionBackground`）で「なし」を選んだときは敷かない
 
 ファイルの再生では中継を通らないので、字幕は出ない。
 
