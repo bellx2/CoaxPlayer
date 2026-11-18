@@ -11,6 +11,8 @@ struct Channel: Identifiable {
     var logoSource: (downloadDataID: Int, logoID: Int)? = nil
     /// 最初の番組（局名を取るサービス）の番組番号。3 桁番号に使う
     var serviceID: Int? = nil
+    /// スキャンで受けた TS のビットレート。ワンセグの階層だけなら約 0.4、フルセグも受かれば約 17
+    var bitrateMbps: Double? = nil
 
     /// 画面に出す番号。リモコンの番号が無ければ物理チャンネル
     var number: String { remoteKey.map(String.init) ?? "\(channel)ch" }
@@ -72,11 +74,15 @@ enum ScanFile {
                 ? (downloadDataID: logoInfo?["download_data_id"] as? Int ?? 0, logoID: logoInfo?["logo_id"] as? Int ?? 0)
                 : nil
             return Channel(channel: channel, name: name, remoteKey: remoteKey, logoSource: logoSource,
-                           serviceID: services?.first?["service_id"] as? Int)
+                           serviceID: services?.first?["service_id"] as? Int,
+                           bitrateMbps: analysis?["bitrate_mbps"] as? Double)
         }
-        // リモコンの番号の順に並べる。番号の無いものは、スキャンした順のまま後ろへ
-        return channels.enumerated().sorted {
-            ($0.element.remoteKey ?? Int.max, $0.offset) < ($1.element.remoteKey ?? Int.max, $1.offset)
-        }.map(\.element)
+        // リモコンの番号の順に並べる。番号の無いものは、スキャンした順のまま後ろへ。
+        // 番号が同じ局は、ビットレートの大きい（フルセグも受かっている）局を先にする
+        func key(_ item: (offset: Int, element: Channel)) -> (Int, Double, Int) {
+            guard let remoteKey = item.element.remoteKey else { return (Int.max, 0, item.offset) }
+            return (remoteKey, -(item.element.bitrateMbps ?? 0), item.offset)
+        }
+        return channels.enumerated().sorted { key($0) < key($1) }.map(\.element)
     }
 }
